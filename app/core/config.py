@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
 
@@ -27,6 +27,15 @@ class Settings(BaseSettings):
     postgres_test_db: str = "ledgerflow_test"
     postgres_user: str
     postgres_password: SecretStr
+
+    # Connection pool. Requests beyond pool_size + max_overflow wait (pool_timeout) for a
+    # free connection; that queueing is not a database lock conflict.
+    db_pool_size: int = Field(default=10, ge=1)
+    db_max_overflow: int = Field(default=20, ge=0)
+    db_pool_timeout_seconds: float = Field(default=30, gt=0)
+    # Max wait for a row lock (or an in-flight request with the same Idempotency-Key)
+    # before a transfer gives up with a retryable CONCURRENCY_CONFLICT.
+    transfer_lock_timeout_ms: int = Field(default=3000, ge=1, le=60_000)
 
     @model_validator(mode="after")
     def _forbid_dev_endpoints_in_production(self) -> "Settings":
