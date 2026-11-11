@@ -6,6 +6,7 @@ Per test: TRUNCATE all tables so tests are independent.
 """
 
 import re
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -95,16 +96,53 @@ def engine(test_settings: Settings, alembic_config: Config) -> Iterator[Engine]:
     engine.dispose()
 
 
+def reset_database(engine: Engine) -> None:
+    """Remove all test data but keep the migration-seeded system funding account.
+
+    TRUNCATE bypasses the append-only row triggers on transfers/ledger_entries, which is
+    exactly what test cleanup needs and what the application can never do.
+    """
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE idempotency_records, ledger_entries, transfers"))
+        conn.execute(text("DELETE FROM accounts WHERE kind <> 'system'"))
+        conn.execute(text("UPDATE accounts SET balance_minor = 0 WHERE kind = 'system'"))
+
+
 @pytest.fixture(autouse=True)
 def _clean_tables(engine: Engine) -> Iterator[None]:
     yield
-    with engine.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE transfers, accounts"))
+    reset_database(engine)
 
 
 @pytest.fixture
 def session_factory(engine: Engine) -> sessionmaker[Session]:
     return create_session_factory(engine)
+
+
+# Concurrency tests run up to 100 threads. Each thread opens its own session; the pool
+# caps real connections at 25 (PostgreSQL's default max_connections is 100), so excess
+# threads queue for a connection (pool_timeout) instead of failing. Pool queueing is not
+# lock contention and never produces ConcurrencyConflictError.
+CONCURRENT_POOL_SIZE = 25
+
+
+@pytest.fixture(scope="session")
+def concurrent_engine(engine: Engine, test_settings: Settings) -> Iterator[Engine]:
+    concurrent = create_engine(
+        test_settings.database_url,
+        pool_size=CONCURRENT_POOL_SIZE,
+        max_overflow=0,
+        pool_timeout=120,
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
+    )
+    yield concurrent
+    concurrent.dispose()
+
+
+@pytest.fixture
+def concurrent_factory(concurrent_engine: Engine) -> sessionmaker[Session]:
+    return create_session_factory(concurrent_engine)
 
 
 @pytest.fixture
@@ -138,7 +176,12 @@ def get_balance(client: TestClient, account_id: str) -> int:
 
 
 def post_transfer(
-    client: TestClient, source_id: str, destination_id: str, amount_minor: int
+    client: TestClient,
+    source_id: str,
+    destination_id: str,
+    amount_minor: int,
+    *,
+    idempotency_key: str | None = None,
 ):  # -> httpx.Response
     return client.post(
         "/api/v1/transfers",
@@ -148,4 +191,5 @@ def post_transfer(
             "amount_minor": amount_minor,
             "currency": "USD",
         },
+        headers={"Idempotency-Key": idempotency_key or str(uuid.uuid4())},
     )

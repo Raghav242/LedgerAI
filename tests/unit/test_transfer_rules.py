@@ -9,9 +9,11 @@ from app.core.exceptions import (
     InsufficientFundsError,
     InvalidAmountError,
     SameAccountTransferError,
+    SystemAccountNotAllowedError,
 )
-from app.models import Account
+from app.models import Account, TransferKind
 from app.services.transfer_rules import (
+    validate_account_kinds,
     validate_transfer_against_accounts,
     validate_transfer_request,
 )
@@ -58,3 +60,41 @@ def test_rejects_mismatched_account_currencies() -> None:
 def test_rejects_transfer_currency_different_from_accounts() -> None:
     with pytest.raises(CurrencyMismatchError):
         validate_transfer_against_accounts(make_account(1_000), make_account(), 100, "EUR")
+
+
+def make_system_account(balance_minor: int = 0) -> Account:
+    return Account(
+        id=uuid.uuid4(), name="system", currency="USD", kind="system", balance_minor=balance_minor
+    )
+
+
+def test_system_account_has_no_funds_limit() -> None:
+    validate_transfer_against_accounts(make_system_account(-(10**9)), make_account(), 10**6, "USD")
+
+
+@pytest.mark.parametrize(
+    ("kind", "source_is_system", "destination_is_system"),
+    [
+        (TransferKind.TRANSFER, True, False),  # merchants cannot spend system money
+        (TransferKind.TRANSFER, False, True),  # nor pay into the system account
+        (TransferKind.DEV_FUNDING, False, False),  # funding must come from the system
+        (TransferKind.DEV_FUNDING, True, True),
+    ],
+)
+def test_account_kind_rules(
+    kind: TransferKind, source_is_system: bool, destination_is_system: bool
+) -> None:
+    source = make_system_account() if source_is_system else make_account(1_000)
+    destination = make_system_account() if destination_is_system else make_account()
+    with pytest.raises(SystemAccountNotAllowedError):
+        validate_account_kinds(kind, source, destination)
+
+
+@pytest.mark.parametrize(
+    ("kind", "source_is_system"), [(TransferKind.TRANSFER, False), (TransferKind.DEV_FUNDING, True)]
+)
+def test_account_kind_rules_allow_valid_movements(
+    kind: TransferKind, source_is_system: bool
+) -> None:
+    source = make_system_account() if source_is_system else make_account(1_000)
+    validate_account_kinds(kind, source, make_account())

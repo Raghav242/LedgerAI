@@ -1,136 +1,233 @@
-"""Atomicity tests: a failure at any point inside a transfer must leave no trace.
+"""Atomicity: a failure at any step of a transfer must leave no trace at all.
 
-These call the service directly (no HTTP) and inject failures *after* the debit has
-been applied in memory, which is exactly the moment a partial write would be possible.
+Not in balances, not in transfers, not in ledger_entries, and not in idempotency_records
+(so the same Idempotency-Key can be retried). Failures are injected *after* balances
+were already modified in the session, the moment a partial write would be possible.
 """
 
 import uuid
 
 import pytest
-from sqlalchemy import func, select, text, update
+from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import Account, Transfer
+from app.models import (
+    SYSTEM_FUNDING_ACCOUNT_ID,
+    Account,
+    LedgerEntry,
+    LedgerEntryRole,
+    Transfer,
+)
+from app.repositories.idempotency_repository import IdempotencyRepository
+from app.repositories.ledger_repository import LedgerRepository
 from app.repositories.transfer_repository import TransferRepository
-from app.services import transfer_service as transfer_service_module
-from app.services.account_service import AccountService
-from app.services.transfer_service import TransferService
+from app.services import ledger_posting
+from tests.integration.support import (
+    balance,
+    create_account,
+    idempotency_record,
+    ledger_entry_count,
+    merchant_transfer_count,
+    transfer,
+)
+
+Factory = sessionmaker[Session]
 
 
-def _setup_accounts(factory: sessionmaker[Session], funded: int) -> tuple[uuid.UUID, uuid.UUID]:
-    with factory() as session:
-        service = AccountService(session)
-        source = service.create_account("Source", "USD")
-        destination = service.create_account("Destination", "USD")
-        if funded:
-            service.fund_account(source.id, funded)
-        return source.id, destination.id
-
-
-def _snapshot(factory: sessionmaker[Session], *ids: uuid.UUID) -> tuple[list[int], int]:
-    """Read committed state through a brand-new session (no cached objects)."""
-    with factory() as session:
-        balances = [session.get_one(Account, i).balance_minor for i in ids]
-        transfer_count = session.scalar(select(func.count()).select_from(Transfer))
-        return balances, transfer_count or 0
-
-
-def test_failure_after_debit_rolls_back_everything(
-    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
+def _assert_untouched(
+    factory: Factory, source: uuid.UUID, destination: uuid.UUID, key: str
 ) -> None:
-    source_id, destination_id = _setup_accounts(session_factory, funded=1_000)
-
-    def explode(self: TransferRepository, transfer: Transfer) -> Transfer:
-        raise RuntimeError("simulated crash while writing the transfer record")
-
-    # By the time add() runs, both balances have already been modified in the session.
-    monkeypatch.setattr(TransferRepository, "add", explode)
-
-    with session_factory() as session, pytest.raises(RuntimeError):
-        TransferService(session).create_transfer(
-            source_account_id=source_id,
-            destination_account_id=destination_id,
-            amount_minor=400,
-            currency="USD",
-        )
-
-    assert _snapshot(session_factory, source_id, destination_id) == ([1_000, 0], 0)
+    assert balance(factory, source) == 1_000
+    assert balance(factory, destination) == 0
+    assert merchant_transfer_count(factory) == 0
+    assert ledger_entry_count(factory) == 2  # only the funding posting
+    assert idempotency_record(factory, key) is None
 
 
-def test_database_check_constraint_rolls_back_whole_transfer(
-    session_factory: sessionmaker[Session], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Defense in depth: even if the application's funds check were buggy, the
-    CHECK (balance_minor >= 0) constraint rejects the overdraft and the transaction
-    rolls back the credit and the transfer row with it."""
-    source_id, destination_id = _setup_accounts(session_factory, funded=100)
-    monkeypatch.setattr(
-        transfer_service_module, "validate_transfer_against_accounts", lambda *a, **k: None
-    )
-
-    with session_factory() as session, pytest.raises(IntegrityError) as exc_info:
-        TransferService(session).create_transfer(
-            source_account_id=source_id,
-            destination_account_id=destination_id,
-            amount_minor=500,
-            currency="USD",
-        )
-
-    assert "ck_accounts_balance_non_negative" in str(exc_info.value)
-    assert _snapshot(session_factory, source_id, destination_id) == ([100, 0], 0)
-
-
-def test_session_is_usable_after_a_rolled_back_transfer(
-    session_factory: sessionmaker[Session],
-) -> None:
-    source_id, destination_id = _setup_accounts(session_factory, funded=1_000)
-
-    with session_factory() as session:
-        service = TransferService(session)
-        with pytest.raises(Exception, match="insufficient"):
-            service.create_transfer(
-                source_account_id=source_id,
-                destination_account_id=destination_id,
-                amount_minor=5_000,
-                currency="USD",
-            )
-        service.create_transfer(
-            source_account_id=source_id,
-            destination_account_id=destination_id,
-            amount_minor=300,
-            currency="USD",
-        )
-
-    assert _snapshot(session_factory, source_id, destination_id) == ([700, 300], 1)
-
-
-def test_negative_balance_is_rejected_by_database(session_factory: sessionmaker[Session]) -> None:
-    source_id, _ = _setup_accounts(session_factory, funded=0)
-    with session_factory() as session, pytest.raises(IntegrityError):
-        session.execute(update(Account).where(Account.id == source_id).values(balance_minor=-1))
-        session.commit()
+def _boom(*_args: object, **_kwargs: object) -> None:
+    raise RuntimeError("simulated failure")
 
 
 @pytest.mark.parametrize(
-    ("column_sql", "constraint"),
+    ("target", "attribute"),
     [
-        ("amount_minor = 0", "ck_transfers_amount_positive"),
-        ("destination_account_id = source_account_id", "ck_transfers_distinct_accounts"),
+        (TransferRepository, "add"),  # writing the transfer row
+        (LedgerRepository, "add_postings"),  # writing the ledger entries   (requirement 7)
+        (IdempotencyRepository, "complete"),  # storing the outcome         (requirement 8)
+    ],
+    ids=["transfer-insert", "ledger-insert", "idempotency-complete"],
+)
+def test_failure_at_any_step_rolls_back_everything(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch, target: type, attribute: str
+) -> None:
+    source = create_account(session_factory, funded=1_000)
+    destination = create_account(session_factory)
+    key = str(uuid.uuid4())
+
+    with monkeypatch.context() as patch:
+        patch.setattr(target, attribute, _boom)
+        with pytest.raises(RuntimeError, match="simulated failure"):
+            transfer(session_factory, source, destination, 400, key=key)
+
+    _assert_untouched(session_factory, source, destination, key)
+
+    # The claim was rolled back too, so the very same key now executes normally, once.
+    result = transfer(session_factory, source, destination, 400, key=key)
+    assert result.succeeded and not result.replayed
+    assert balance(session_factory, source) == 600
+    assert merchant_transfer_count(session_factory) == 1
+
+
+def _unbalanced_postings(self: LedgerRepository, transfer_row: Transfer) -> list[LedgerEntry]:
+    """Debit -amount, credit amount+1: each row is individually valid, the pair is not."""
+    entries = [
+        LedgerEntry(
+            transfer_id=transfer_row.id,
+            account_id=transfer_row.source_account_id,
+            role=LedgerEntryRole.DEBIT,
+            amount_minor=-transfer_row.amount_minor,
+            currency=transfer_row.currency,
+        ),
+        LedgerEntry(
+            transfer_id=transfer_row.id,
+            account_id=transfer_row.destination_account_id,
+            role=LedgerEntryRole.CREDIT,
+            amount_minor=transfer_row.amount_minor + 1,
+            currency=transfer_row.currency,
+        ),
+    ]
+    self._session.add_all(entries)
+    self._session.flush()
+    return entries
+
+
+def _duplicate_credit(self: LedgerRepository, transfer_row: Transfer) -> list[LedgerEntry]:
+    entries = REAL_ADD_POSTINGS(self, transfer_row)
+    self._session.add(
+        LedgerEntry(
+            transfer_id=transfer_row.id,
+            account_id=transfer_row.destination_account_id,
+            role=LedgerEntryRole.CREDIT,
+            amount_minor=1,
+            currency=transfer_row.currency,
+        )
+    )
+    self._session.flush()
+    return entries
+
+
+REAL_ADD_POSTINGS = LedgerRepository.add_postings
+
+
+@pytest.mark.parametrize(
+    ("bad_postings", "expected"),
+    [
+        # Deferred constraint trigger: checked at COMMIT once both entries exist.
+        (_unbalanced_postings, "ledger invariant violated"),
+        # Unique (transfer_id, role): a second credit posting for the same transfer.
+        (_duplicate_credit, "uq_ledger_entries_transfer_id_role"),
+    ],
+    ids=["entries-do-not-sum-to-zero", "duplicate-posting"],
+)
+def test_invalid_ledger_postings_are_rejected_by_database(
+    session_factory: Factory,
+    monkeypatch: pytest.MonkeyPatch,
+    bad_postings: object,
+    expected: str,
+) -> None:
+    source = create_account(session_factory, funded=1_000)
+    destination = create_account(session_factory)
+    key = str(uuid.uuid4())
+
+    monkeypatch.setattr(LedgerRepository, "add_postings", bad_postings)
+    with pytest.raises(IntegrityError, match=expected):
+        transfer(session_factory, source, destination, 400, key=key)
+
+    _assert_untouched(session_factory, source, destination, key)
+
+
+def test_transfer_without_ledger_entries_is_rejected_at_commit(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = create_account(session_factory, funded=1_000)
+    destination = create_account(session_factory)
+    key = str(uuid.uuid4())
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LedgerRepository, "add_postings", lambda self, transfer_row: [])
+        with pytest.raises(IntegrityError, match="ledger invariant violated"):
+            transfer(session_factory, source, destination, 400, key=key)
+
+    _assert_untouched(session_factory, source, destination, key)
+
+
+def test_database_check_constraint_rolls_back_whole_transfer(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Defense in depth: even if the funds check were buggy, CHECK (balance >= 0) rejects
+    the overdraft and the credit, transfer row, entries and claim all roll back."""
+    source = create_account(session_factory, funded=1_000)
+    destination = create_account(session_factory)
+    key = str(uuid.uuid4())
+    monkeypatch.setattr(ledger_posting, "validate_transfer_against_accounts", lambda *a, **k: None)
+
+    with pytest.raises(IntegrityError, match="ck_accounts_balance_non_negative"):
+        transfer(session_factory, source, destination, 5_000, key=key)
+
+    _assert_untouched(session_factory, source, destination, key)
+
+
+def test_session_is_usable_after_a_rolled_back_transfer(
+    session_factory: Factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = create_account(session_factory, funded=1_000)
+    destination = create_account(session_factory)
+    from app.services.transfer_service import TransferCommand, TransferService
+
+    with session_factory() as session:
+        service = TransferService(session, lock_timeout_ms=5_000)
+        command = TransferCommand(source, destination, 300, "USD")
+        with monkeypatch.context() as patch:
+            patch.setattr(LedgerRepository, "add_postings", _boom)
+            with pytest.raises(RuntimeError):
+                service.create_transfer(scope="s", idempotency_key="k1", command=command)
+        result = service.create_transfer(scope="s", idempotency_key="k2", command=command)
+        assert result.succeeded
+
+    assert balance(session_factory, source) == 700
+    assert balance(session_factory, destination) == 300
+
+
+def test_negative_merchant_balance_is_rejected_by_database(session_factory: Factory) -> None:
+    account_id = create_account(session_factory)
+    with session_factory() as session, pytest.raises(IntegrityError):
+        session.execute(update(Account).where(Account.id == account_id).values(balance_minor=-1))
+        session.commit()
+
+
+def test_system_account_may_hold_negative_balance(session_factory: Factory) -> None:
+    create_account(session_factory, funded=2_500)
+    assert balance(session_factory, SYSTEM_FUNDING_ACCOUNT_ID) == -2_500
+
+
+@pytest.mark.parametrize(
+    ("amount", "same_account", "constraint"),
+    [
+        (0, False, "ck_transfers_amount_positive"),
+        (1, True, "ck_transfers_distinct_accounts"),
     ],
 )
 def test_transfer_table_constraints(
-    session_factory: sessionmaker[Session], column_sql: str, constraint: str
+    session_factory: Factory, amount: int, same_account: bool, constraint: str
 ) -> None:
-    source_id, destination_id = _setup_accounts(session_factory, funded=0)
-    with session_factory() as session:
+    source = create_account(session_factory)
+    destination = source if same_account else create_account(session_factory)
+    with session_factory() as session, pytest.raises(IntegrityError, match=constraint):
         session.execute(
             text(
                 "INSERT INTO transfers (id, source_account_id, destination_account_id, "
-                "amount_minor, currency, status) VALUES (:id, :s, :d, 1, 'USD', 'completed')"
+                "amount_minor, currency, status) VALUES (:id, :s, :d, :amount, 'USD', 'completed')"
             ),
-            {"id": uuid.uuid4(), "s": source_id, "d": destination_id},
+            {"id": uuid.uuid4(), "s": source, "d": destination, "amount": amount},
         )
-        with pytest.raises(IntegrityError) as exc_info:
-            session.execute(text(f"UPDATE transfers SET {column_sql}"))
-        assert constraint in str(exc_info.value)

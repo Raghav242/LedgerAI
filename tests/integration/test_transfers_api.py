@@ -11,7 +11,9 @@ from tests.integration.conftest import (
 
 
 def _count_transfers(client: TestClient) -> int:
-    return len(client.get("/api/v1/transfers", params={"limit": 100}).json()["items"])
+    return len(
+        client.get("/api/v1/transfers", params={"limit": 100, "kind": "transfer"}).json()["items"]
+    )
 
 
 def test_successful_transfer_updates_both_balances_and_persists_record(
@@ -33,7 +35,7 @@ def test_successful_transfer_updates_both_balances_and_persists_record(
     assert get_balance(client, alice["id"]) == 7_450
     assert get_balance(client, bob["id"]) == 2_550
 
-    history = client.get("/api/v1/transfers").json()["items"]
+    history = client.get("/api/v1/transfers", params={"kind": "transfer"}).json()["items"]
     assert [t["id"] for t in history] == [transfer["id"]]
 
 
@@ -96,6 +98,7 @@ def test_fractional_amount_returns_422(client: TestClient) -> None:
             "amount_minor": 10.5,
             "currency": "USD",
         },
+        headers={"Idempotency-Key": str(uuid.uuid4())},
     )
     assert response.status_code == 422
 
@@ -141,12 +144,17 @@ def test_unsupported_transfer_currency_returns_422(client: TestClient) -> None:
             "amount_minor": 100,
             "currency": "EUR",
         },
+        headers={"Idempotency-Key": str(uuid.uuid4())},
     )
     assert response.status_code == 422
 
 
 def test_missing_fields_return_422_with_field_locations(client: TestClient) -> None:
-    response = client.post("/api/v1/transfers", json={"amount_minor": 100})
+    response = client.post(
+        "/api/v1/transfers",
+        json={"amount_minor": 100},
+        headers={"Idempotency-Key": str(uuid.uuid4())},
+    )
     assert response.status_code == 422
     locations = {tuple(d["loc"]) for d in response.json()["error"]["details"]}
     assert ("body", "source_account_id") in locations
@@ -160,7 +168,10 @@ def test_transfer_history_is_newest_first_and_filterable(client: TestClient) -> 
     first = post_transfer(client, a, b, 100).json()
     second = post_transfer(client, a, c, 200).json()
 
-    all_ids = [t["id"] for t in client.get("/api/v1/transfers").json()["items"]]
+    merchant_transfers = client.get("/api/v1/transfers", params={"kind": "transfer"}).json()[
+        "items"
+    ]
+    all_ids = [t["id"] for t in merchant_transfers]
     assert all_ids == [second["id"], first["id"]]
 
     for_b = client.get("/api/v1/transfers", params={"account_id": b}).json()["items"]
