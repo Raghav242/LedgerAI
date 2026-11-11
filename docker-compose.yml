@@ -1,25 +1,199 @@
 name: ledgerflow
 
+# Shared definition of an API replica. Every replica runs the same image with the same
+# configuration except REPLICA_ID; all state lives in PostgreSQL and Redis.
+x-api: &api
+  build: .
+  image: ledgerflow-api:local
+  restart: unless-stopped
+  environment: &api-env
+    APP_ENV: ${APP_ENV:-development}
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ENABLE_DEV_ENDPOINTS: ${ENABLE_DEV_ENDPOINTS:-false}
+    EXPOSE_REPLICA_HEADER: ${EXPOSE_REPLICA_HEADER:-true}
+    # Container-to-container traffic uses service names on the internal network.
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    # Stack tests and benchmarks point the replicas at their own database.
+    POSTGRES_DB: ${API_POSTGRES_DB:-${POSTGRES_DB:-ledgerflow}}
+    # Per-replica pool: 4 replicas x (5 + 5) = 40 connections max, well under max_connections.
+    DB_POOL_SIZE: ${API_DB_POOL_SIZE:-5}
+    DB_MAX_OVERFLOW: ${API_DB_MAX_OVERFLOW:-5}
+    DB_POOL_TIMEOUT_SECONDS: ${API_DB_POOL_TIMEOUT_SECONDS:-10}
+    TRANSFER_LOCK_TIMEOUT_MS: ${TRANSFER_LOCK_TIMEOUT_MS:-3000}
+    REDIS_URL: redis://redis:6379/0
+    RATE_LIMIT_BACKEND: redis
+    RATE_LIMIT_WRITE_CAPACITY: ${RATE_LIMIT_WRITE_CAPACITY:-20}
+    RATE_LIMIT_WRITE_REFILL_TOKENS: ${RATE_LIMIT_WRITE_REFILL_TOKENS:-10}
+    RATE_LIMIT_WRITE_REFILL_INTERVAL_MS: ${RATE_LIMIT_WRITE_REFILL_INTERVAL_MS:-1000}
+    RATE_LIMIT_READ_CAPACITY: ${RATE_LIMIT_READ_CAPACITY:-100}
+    RATE_LIMIT_READ_REFILL_TOKENS: ${RATE_LIMIT_READ_REFILL_TOKENS:-50}
+    RATE_LIMIT_READ_REFILL_INTERVAL_MS: ${RATE_LIMIT_READ_REFILL_INTERVAL_MS:-1000}
+  # Names of the stateful dependencies are pinned in /etc/hosts. When a container stops,
+  # Docker DNS stops resolving its name and getaddrinfo() then takes ~7 s (the query is
+  # forwarded to the host's resolvers) -- no socket timeout covers that. With fixed
+  # addresses, "Redis is down" is a plain TCP connect failure bounded by the 250 ms
+  # connect timeout, so financial writes fail closed fast instead of hanging.
+  extra_hosts:
+    - "redis:${BACKEND_NET:-172.28.0}.10"
+    - "postgres:${BACKEND_NET:-172.28.0}.11"
+  # No `ports:` -- replicas are reachable only through NGINX on the internal network.
+  expose:
+    - "8000"
+  networks:
+    - backend
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_healthy
+
 services:
   postgres:
     image: postgres:16-alpine
     container_name: ledgerflow-postgres
     restart: unless-stopped
+    command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-100}"]
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       POSTGRES_DB: ${POSTGRES_DB:-ledgerflow}
     ports:
-      # Bound to localhost only: the dev database is not reachable from the LAN.
+      # Loopback only (never the LAN): used by locally run uvicorn, the test suite and
+      # migrations from the host. Containers use postgres:5432 on the internal network.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      backend:
+        ipv4_address: ${BACKEND_NET:-172.28.0}.11
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 10
       start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    container_name: ledgerflow-redis
+    restart: unless-stopped
+    # Rate-limit state is ephemeral: no persistence. Every key has a TTL, so under memory
+    # pressure evict the soonest-expiring buckets (an evicted bucket simply reads as full).
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 64mb
+      - --maxmemory-policy
+      - volatile-ttl
+    ports:
+      # Loopback only: for the Redis test suite and locally run uvicorn.
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    networks:
+      backend:
+        ipv4_address: ${BACKEND_NET:-172.28.0}.10
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Runs `alembic upgrade head` exactly once per `up`, before any replica starts.
+  # Replicas never migrate on their own (no race between replicas, no partial schemas).
+  migrate:
+    <<: *api
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-1:
+    <<: *api
+    environment:
+      <<: *api-env
+      REPLICA_ID: api-1
+    networks:
+      backend:
+        ipv4_address: ${BACKEND_NET:-172.28.0}.21
+
+  api-2:
+    <<: *api
+    environment:
+      <<: *api-env
+      REPLICA_ID: api-2
+    networks:
+      backend:
+        ipv4_address: ${BACKEND_NET:-172.28.0}.22
+
+  # Extra replicas for scaling experiments: docker compose --profile scale4 up -d
+  api-3:
+    <<: *api
+    profiles: [scale4]
+    environment:
+      <<: *api-env
+      REPLICA_ID: api-3
+    networks:
+      backend:
+        ipv4_address: ${BACKEND_NET:-172.28.0}.23
+
+  api-4:
+    <<: *api
+    profiles: [scale4]
+    environment:
+      <<: *api-env
+      REPLICA_ID: api-4
+    networks:
+      backend:
+        ipv4_address: ${BACKEND_NET:-172.28.0}.24
+
+  nginx:
+    image: nginx:1.28-alpine
+    container_name: ledgerflow-nginx
+    restart: unless-stopped
+    ports:
+      # The only published API port. Loopback by default; set NGINX_BIND=0.0.0.0 to
+      # expose it on the LAN deliberately.
+      - "${NGINX_BIND:-127.0.0.1}:${NGINX_PORT:-8080}:8080"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      backend:
+        ipv4_address: ${BACKEND_NET:-172.28.0}.12
+    depends_on:
+      api-1:
+        condition: service_healthy
+      api-2:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/health/live || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+networks:
+  backend:
+    ipam:
+      config:
+        # Fixed addresses (.10 redis, .11 postgres, .12 nginx, .21-.24 api replicas) live in
+        # the lower half; Docker hands out dynamic addresses (migrate, load generators, ...)
+        # only from the upper half, so a reserved address is never taken while its owner
+        # is stopped. A replica that restarts therefore always comes back at the SAME
+        # address, and NGINX never routes to a stale one. Set BACKEND_NET (first three
+        # octets) if 172.28.0.x collides with a network on your machine.
+        # LOCAL WORKAROUND ONLY: production uses dynamic addresses plus service discovery
+        # (e.g. Kubernetes Services, Consul, cloud LB target groups) instead of hand-assigned
+        # IPs. See docs/phase-3-design.md, "Fixed IPs are a local workaround".
+        - subnet: ${BACKEND_NET:-172.28.0}.0/24
+          ip_range: ${BACKEND_NET:-172.28.0}.128/25
 
 volumes:
   pgdata:
