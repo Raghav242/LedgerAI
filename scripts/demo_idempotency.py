@@ -11,6 +11,8 @@ import uuid
 
 import httpx
 from demo_common import (
+    DIRECT_API_URL,
+    MAX_ATTEMPTS,
     RETRYABLE_CODES,
     balance,
     base_arg_parser,
@@ -19,7 +21,9 @@ from demo_common import (
     error_code,
     fund,
     new_run_id,
+    post_admitted,
     preflight,
+    retry_delay,
     transfer_body,
     usd,
     verify_ledger,
@@ -27,7 +31,6 @@ from demo_common import (
 
 FUNDING_MINOR = 10_000
 AMOUNT_MINOR = 1_000
-MAX_ATTEMPTS = 5
 
 
 async def send(
@@ -41,6 +44,7 @@ async def send(
         )
         if error_code(response) not in RETRYABLE_CODES:
             break
+        await asyncio.sleep(retry_delay(response))
     assert response is not None
     return response
 
@@ -55,7 +59,7 @@ async def fire(base_url: str, duplicates: int, body: dict, key: str) -> list[htt
 
 
 def main() -> None:
-    parser = base_arg_parser(__doc__ or "")
+    parser = base_arg_parser(__doc__ or "", DIRECT_API_URL)
     parser.add_argument("--duplicates", type=int, default=20)
     args = parser.parse_args()
     run_id = new_run_id()
@@ -102,7 +106,8 @@ def main() -> None:
         check(source_balance == FUNDING_MINOR - AMOUNT_MINOR, "source debited exactly once")
         check(destination_balance == AMOUNT_MINOR, "destination credited exactly once")
 
-        reuse = client.post(
+        reuse = post_admitted(
+            client,
             "/api/v1/transfers",
             json=transfer_body(source, destination, AMOUNT_MINOR * 2),
             headers={"Idempotency-Key": key},
@@ -112,8 +117,8 @@ def main() -> None:
             "same key with a different amount is rejected (422 IDEMPOTENCY_KEY_REUSED)",
         )
         check(balance(client, source) == source_balance, "rejected reuse moved no money")
-        fresh = client.post(
-            "/api/v1/transfers", json=body, headers={"Idempotency-Key": str(uuid.uuid4())}
+        fresh = post_admitted(
+            client, "/api/v1/transfers", json=body, headers={"Idempotency-Key": str(uuid.uuid4())}
         )
         check(fresh.status_code == 201, "a NEW key is a new, separate transfer")
         verify_ledger(client, [source, destination])

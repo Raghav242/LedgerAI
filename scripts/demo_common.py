@@ -7,18 +7,47 @@ drawn from the system funding account, which every funding uses by design.
 
 import argparse
 import sys
+import time
 import uuid
 from typing import Any, NoReturn
 
 import httpx
 
-RETRYABLE_CODES = {"CONCURRENCY_CONFLICT", "IDEMPOTENCY_REQUEST_IN_PROGRESS", "OUTCOME_UNKNOWN"}
+# Safe to retry with the SAME request (and the same Idempotency-Key): nothing executed,
+# or the outcome is unknown and the key makes the retry safe.
+RETRYABLE_CODES = {
+    "CONCURRENCY_CONFLICT",
+    "IDEMPOTENCY_REQUEST_IN_PROGRESS",
+    "OUTCOME_UNKNOWN",
+    "RATE_LIMITED",
+}
+MAX_ATTEMPTS = 120
+DIRECT_API_URL = "http://127.0.0.1:8000"  # a locally run uvicorn
+NGINX_URL = "http://127.0.0.1:8080"  # the Compose stack's load balancer
 
 
-def base_arg_parser(description: str) -> argparse.ArgumentParser:
+def base_arg_parser(description: str, default_url: str = NGINX_URL) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="API base URL")
+    parser.add_argument("--base-url", default=default_url, help=f"API base URL ({default_url})")
     return parser
+
+
+def retry_delay(response: httpx.Response | None) -> float:
+    """Seconds to wait before retrying: Retry-After when the server sent one."""
+    if response is not None and "Retry-After" in response.headers:
+        return float(response.headers["Retry-After"])
+    return 0.2
+
+
+def post_admitted(client: httpx.Client, url: str, **kwargs: Any) -> httpx.Response:
+    """POST, retrying only on 429: a rate-limited request was never executed, so even a
+    non-idempotent call (like dev funding) is safe to resend."""
+    for _ in range(MAX_ATTEMPTS):
+        response = client.post(url, **kwargs)
+        if response.status_code != 429:
+            return response
+        time.sleep(retry_delay(response))
+    return response
 
 
 def fail(message: str) -> NoReturn:
@@ -45,14 +74,14 @@ def preflight(client: httpx.Client) -> None:
 
 
 def create_demo_account(client: httpx.Client, run_id: str, label: str) -> str:
-    response = client.post("/api/v1/accounts", json={"name": f"demo-{run_id}-{label}"})
+    response = post_admitted(client, "/api/v1/accounts", json={"name": f"demo-{run_id}-{label}"})
     response.raise_for_status()
     return response.json()["id"]
 
 
 def fund(client: httpx.Client, account_id: str, amount_minor: int) -> None:
-    response = client.post(
-        f"/api/v1/accounts/{account_id}/fund", json={"amount_minor": amount_minor}
+    response = post_admitted(
+        client, f"/api/v1/accounts/{account_id}/fund", json={"amount_minor": amount_minor}
     )
     response.raise_for_status()
 

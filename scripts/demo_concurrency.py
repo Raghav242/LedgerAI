@@ -12,6 +12,8 @@ from collections import Counter
 
 import httpx
 from demo_common import (
+    DIRECT_API_URL,
+    MAX_ATTEMPTS,
     RETRYABLE_CODES,
     balance,
     base_arg_parser,
@@ -21,6 +23,7 @@ from demo_common import (
     fund,
     new_run_id,
     preflight,
+    retry_delay,
     transfer_body,
     usd,
     verify_ledger,
@@ -28,7 +31,6 @@ from demo_common import (
 
 FUNDING_MINOR = 10_000  # $100.00
 AMOUNT_MINOR = 1_000  # $10.00
-MAX_ATTEMPTS = 5
 
 
 async def send_transfer(
@@ -45,6 +47,7 @@ async def send_transfer(
                 headers={"Idempotency-Key": key},
             )
         except httpx.TransportError:
+            await asyncio.sleep(retry_delay(None))
             continue  # outcome unknown: the same key makes the retry safe
         code = error_code(response)
         if response.status_code == 201:
@@ -53,6 +56,7 @@ async def send_transfer(
             return "insufficient_funds"
         if code not in RETRYABLE_CODES:
             return f"unexpected:{response.status_code}:{code}"
+        await asyncio.sleep(retry_delay(response))
     return "unexpected:retries_exhausted"
 
 
@@ -70,7 +74,7 @@ async def fire(base_url: str, requests: int, source: str, destination: str) -> C
 
 
 def main() -> None:
-    parser = base_arg_parser(__doc__ or "")
+    parser = base_arg_parser(__doc__ or "", DIRECT_API_URL)
     parser.add_argument("--requests", type=int, default=100)
     args = parser.parse_args()
     run_id = new_run_id()
