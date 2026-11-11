@@ -9,11 +9,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.exceptions import (
     AccountNotFoundError,
+    CommitOutcomeUnknownError,
+    ConcurrencyConflictError,
     CurrencyMismatchError,
     DomainError,
+    IdempotencyKeyReusedError,
+    IdempotencyRequestInProgressError,
     InsufficientFundsError,
     InvalidAmountError,
     SameAccountTransferError,
+    SystemAccountNotAllowedError,
 )
 from app.schemas.common import ErrorBody, ErrorResponse
 
@@ -24,14 +29,34 @@ DOMAIN_ERROR_STATUS: dict[type[DomainError], int] = {
     InvalidAmountError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     SameAccountTransferError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     CurrencyMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    SystemAccountNotAllowedError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     # 409: the request is well-formed but conflicts with the account's current state.
     InsufficientFundsError: status.HTTP_409_CONFLICT,
+    # Same key, different body: the key cannot mean two different requests.
+    IdempotencyKeyReusedError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    # Same key still being processed by another request: retry later, same key.
+    IdempotencyRequestInProgressError: status.HTTP_409_CONFLICT,
+    # Rolled back because of lock contention: retry, same key.
+    ConcurrencyConflictError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # May or may not have committed: retry with the SAME key to find out.
+    CommitOutcomeUnknownError: status.HTTP_500_INTERNAL_SERVER_ERROR,
 }
+_STATUS_BY_CODE = {cls.code: code for cls, code in DOMAIN_ERROR_STATUS.items()}
+RETRYABLE_ERRORS = (ConcurrencyConflictError, IdempotencyRequestInProgressError)
+RETRY_AFTER_SECONDS = "1"
 
 
-def _error_response(status_code: int, code: str, message: str, details: Any = None) -> JSONResponse:
+def _error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    details: Any = None,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     body = ErrorResponse(error=ErrorBody(code=code, message=message, details=details))
-    return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"))
+    return JSONResponse(
+        status_code=status_code, content=body.model_dump(mode="json"), headers=headers
+    )
 
 
 def _status_for(exc: DomainError) -> int:
@@ -41,9 +66,19 @@ def _status_for(exc: DomainError) -> int:
     return status.HTTP_400_BAD_REQUEST
 
 
+def status_for_error_code(code: str) -> int:
+    """HTTP status for a stored error code (used when replaying an idempotent rejection)."""
+    return _STATUS_BY_CODE.get(code, status.HTTP_400_BAD_REQUEST)
+
+
 async def handle_domain_error(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, DomainError)
-    return _error_response(_status_for(exc), exc.code, exc.message, exc.details or None)
+    headers = {"Retry-After": RETRY_AFTER_SECONDS} if isinstance(exc, RETRYABLE_ERRORS) else None
+    if isinstance(exc, ConcurrencyConflictError | CommitOutcomeUnknownError):
+        logger.warning("%s: %s", exc.code, exc.__cause__ or exc.message)
+    return _error_response(
+        _status_for(exc), exc.code, exc.message, exc.details or None, headers=headers
+    )
 
 
 async def handle_validation_error(_: Request, exc: Exception) -> JSONResponse:

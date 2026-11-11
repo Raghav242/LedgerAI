@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models import Currency, TransferStatus
+from app.models import Currency, TransferKind, TransferStatus
 from app.schemas.common import AmountMinor
 
 
@@ -26,4 +26,5 @@ class TransferRead(BaseModel):
     amount_minor: int
     currency: Currency
     status: TransferStatus
+    kind: TransferKind
     created_at: datetime
