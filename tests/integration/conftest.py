@@ -24,6 +24,15 @@ from app.main import create_app
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAFE_DB_NAME = re.compile(r"^[a-z_][a-z0-9_]*_test$")
+UNLIMITED_RATE_LIMITS = {
+    f"rate_limit_{kind}_{field}": value
+    for kind in ("read", "write")
+    for field, value in (
+        ("capacity", 100_000),
+        ("refill_tokens", 100_000),
+        ("refill_interval_ms", 1),
+    )
+}
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -45,7 +54,16 @@ def test_settings() -> Settings:
             returncode=2,
         )
     return base.model_copy(
-        update={"postgres_db": test_db, "app_env": "test", "enable_dev_endpoints": True}
+        update={
+            "postgres_db": test_db,
+            "app_env": "test",
+            "enable_dev_endpoints": True,
+            # Business-logic tests are not about rate limiting: use a per-process limiter
+            # with the largest allowed quota so it never interferes. Rate-limit tests
+            # build their own apps with a real Redis limiter (tests/integration/test_rate_limit*).
+            "rate_limit_backend": "memory",
+            **UNLIMITED_RATE_LIMITS,
+        }
     )
 
 

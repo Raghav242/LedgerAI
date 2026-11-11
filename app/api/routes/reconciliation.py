@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.dependencies import ReconciliationServiceDep
+from app.api.rate_limit import ReadRateLimit
 from app.schemas.reconciliation import BalanceMismatchRead, ReconciliationRead
 
 router = APIRouter(prefix="/reconciliation", tags=["ledger"])
@@ -8,6 +9,7 @@ router = APIRouter(prefix="/reconciliation", tags=["ledger"])
 
 @router.get(
     "",
+    dependencies=[ReadRateLimit],
     summary="Compare account balances with ledger-derived balances",
     description=(
         "Read-only check over one consistent snapshot: every account balance must equal the "

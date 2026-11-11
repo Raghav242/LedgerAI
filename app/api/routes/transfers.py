@@ -12,6 +12,7 @@ from app.api.dependencies import (
     TransferServiceDep,
 )
 from app.api.error_handlers import status_for_error_code
+from app.api.rate_limit import ReadRateLimit, WriteRateLimit
 from app.models import TransferKind
 from app.schemas.common import ErrorResponse, Page
 from app.schemas.transfer import TransferCreate, TransferRead
@@ -24,6 +25,7 @@ REPLAY_HEADER = "Idempotent-Replayed"
 
 @router.post(
     "",
+    dependencies=[WriteRateLimit],
     status_code=status.HTTP_201_CREATED,
     response_model=TransferRead,
     summary="Transfer funds between two accounts (idempotent)",
@@ -36,6 +38,7 @@ REPLAY_HEADER = "Idempotent-Replayed"
     ),
     responses={
         status.HTTP_404_NOT_FOUND: {"model": ErrorResponse},
+        status.HTTP_429_TOO_MANY_REQUESTS: {"model": ErrorResponse},
         status.HTTP_409_CONFLICT: {"model": ErrorResponse},
         status.HTTP_422_UNPROCESSABLE_CONTENT: {"model": ErrorResponse},
         status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ErrorResponse},
@@ -69,7 +72,7 @@ def _to_response(result: TransferResult) -> JSONResponse:
     return JSONResponse(content=result.response_body, status_code=status_code, headers=headers)
 
 
-@router.get("", summary="List transfer history (newest first)")
+@router.get("", summary="List transfer history (newest first)", dependencies=[ReadRateLimit])
 def list_transfers(
     service: TransferServiceDep,
     account_id: Annotated[

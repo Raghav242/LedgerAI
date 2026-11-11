@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, status
 
 from app.api.dependencies import AccountServiceDep, LimitQuery, OffsetQuery
+from app.api.rate_limit import ReadRateLimit, WriteRateLimit
 from app.schemas.account import AccountBalance, AccountCreate, AccountFund, AccountRead
 from app.schemas.common import ErrorResponse, Page
 
@@ -11,13 +12,18 @@ router = APIRouter(prefix="/accounts", tags=["accounts"])
 NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}}
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, summary="Create a virtual account")
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a virtual account",
+    dependencies=[WriteRateLimit],
+)
 def create_account(payload: AccountCreate, service: AccountServiceDep) -> AccountRead:
     account = service.create_account(payload.name, payload.currency)
     return AccountRead.model_validate(account)
 
 
-@router.get("", summary="List accounts")
+@router.get("", summary="List accounts", dependencies=[ReadRateLimit])
 def list_accounts(
     service: AccountServiceDep, limit: LimitQuery = 50, offset: OffsetQuery = 0
 ) -> Page[AccountRead]:
@@ -27,12 +33,19 @@ def list_accounts(
     )
 
 
-@router.get("/{account_id}", responses=NOT_FOUND, summary="Get an account")
+@router.get(
+    "/{account_id}", responses=NOT_FOUND, summary="Get an account", dependencies=[ReadRateLimit]
+)
 def get_account(account_id: uuid.UUID, service: AccountServiceDep) -> AccountRead:
     return AccountRead.model_validate(service.get_account(account_id))
 
 
-@router.get("/{account_id}/balance", responses=NOT_FOUND, summary="Get an account balance")
+@router.get(
+    "/{account_id}/balance",
+    responses=NOT_FOUND,
+    summary="Get an account balance",
+    dependencies=[ReadRateLimit],
+)
 def get_account_balance(account_id: uuid.UUID, service: AccountServiceDep) -> AccountBalance:
     account = service.get_account(account_id)
     return AccountBalance(
@@ -46,6 +59,7 @@ dev_router = APIRouter(prefix="/accounts", tags=["development only"])
 
 @dev_router.post(
     "/{account_id}/fund",
+    dependencies=[WriteRateLimit],
     responses=NOT_FOUND,
     summary="[DEV ONLY] Add simulated funds to an account",
     description=(

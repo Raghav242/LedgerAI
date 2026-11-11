@@ -17,6 +17,8 @@ from app.core.exceptions import (
     IdempotencyRequestInProgressError,
     InsufficientFundsError,
     InvalidAmountError,
+    RateLimiterUnavailableError,
+    RateLimitExceededError,
     SameAccountTransferError,
     SystemAccountNotAllowedError,
 )
@@ -40,9 +42,17 @@ DOMAIN_ERROR_STATUS: dict[type[DomainError], int] = {
     ConcurrencyConflictError: status.HTTP_503_SERVICE_UNAVAILABLE,
     # May or may not have committed: retry with the SAME key to find out.
     CommitOutcomeUnknownError: status.HTTP_500_INTERNAL_SERVER_ERROR,
+    # Quota used up; nothing executed. Retry after Retry-After seconds.
+    RateLimitExceededError: status.HTTP_429_TOO_MANY_REQUESTS,
+    # Writes fail closed while the shared limiter is unreachable; nothing executed.
+    RateLimiterUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
 }
 _STATUS_BY_CODE = {cls.code: code for cls, code in DOMAIN_ERROR_STATUS.items()}
-RETRYABLE_ERRORS = (ConcurrencyConflictError, IdempotencyRequestInProgressError)
+RETRYABLE_ERRORS = (
+    ConcurrencyConflictError,
+    IdempotencyRequestInProgressError,
+    RateLimiterUnavailableError,
+)
 RETRY_AFTER_SECONDS = "1"
 
 
@@ -74,7 +84,11 @@ def status_for_error_code(code: str) -> int:
 async def handle_domain_error(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, DomainError)
     headers = {"Retry-After": RETRY_AFTER_SECONDS} if isinstance(exc, RETRYABLE_ERRORS) else None
-    if isinstance(exc, ConcurrencyConflictError | CommitOutcomeUnknownError):
+    if isinstance(exc, RateLimitExceededError):
+        headers = {"Retry-After": str(exc.retry_after_seconds)}
+    if isinstance(
+        exc, ConcurrencyConflictError | CommitOutcomeUnknownError | RateLimiterUnavailableError
+    ):
         logger.warning("%s: %s", exc.code, exc.__cause__ or exc.message)
     return _error_response(
         _status_for(exc), exc.code, exc.message, exc.details or None, headers=headers
