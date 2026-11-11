@@ -3,7 +3,7 @@ import uuid
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Transfer
+from app.models import Transfer, TransferKind
 
 
 class TransferRepository:
@@ -15,7 +15,14 @@ class TransferRepository:
         self._session.flush()
         return transfer
 
-    def list_all(self, *, account_id: uuid.UUID | None, limit: int, offset: int) -> list[Transfer]:
+    def list_all(
+        self,
+        *,
+        account_id: uuid.UUID | None,
+        kind: TransferKind | None,
+        limit: int,
+        offset: int,
+    ) -> list[Transfer]:
         stmt = select(Transfer)
         if account_id is not None:
             stmt = stmt.where(
@@ -24,5 +31,7 @@ class TransferRepository:
                     Transfer.destination_account_id == account_id,
                 )
             )
+        if kind is not None:
+            stmt = stmt.where(Transfer.kind == kind)
         stmt = stmt.order_by(Transfer.created_at.desc(), Transfer.id).limit(limit).offset(offset)
         return list(self._session.scalars(stmt))
