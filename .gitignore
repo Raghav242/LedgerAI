@@ -37,3 +37,6 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Raw Locust CSVs (the summarised tables live in docs)
+benchmarks/results/*/
