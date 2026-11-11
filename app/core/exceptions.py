@@ -72,6 +72,22 @@ class ConcurrencyConflictError(DomainError):
     code = "CONCURRENCY_CONFLICT"
 
 
+class RateLimitExceededError(DomainError):
+    """The caller's quota is used up. Nothing was executed."""
+
+    code = "RATE_LIMITED"
+
+    def __init__(self, message: str, *, retry_after_seconds: int, policy: str) -> None:
+        super().__init__(message, {"policy": policy, "retry_after_seconds": retry_after_seconds})
+        self.retry_after_seconds = retry_after_seconds
+
+
+class RateLimiterUnavailableError(DomainError):
+    """The limiter (Redis) could not be reached. Writes fail closed: nothing was executed."""
+
+    code = "RATE_LIMITER_UNAVAILABLE"
+
+
 class CommitOutcomeUnknownError(DomainError):
     """The connection failed while COMMIT was in flight: it may or may not have committed."""
 
