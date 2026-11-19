@@ -18,3 +18,6 @@ docs
 deploy
 *.md
 !README.md
+
+# Frontend (built separately; never part of the API image)
+frontend
