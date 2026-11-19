@@ -50,6 +50,22 @@ class LedgerRepository:
         )
         return list(self._session.scalars(stmt))
 
+    def list_entries(
+        self, *, account_id: uuid.UUID | None, limit: int, offset: int
+    ) -> list[LedgerEntry]:
+        """Newest postings first; the two legs of one transfer stay adjacent (debit first)."""
+        stmt = select(LedgerEntry)
+        if account_id is not None:
+            stmt = stmt.where(LedgerEntry.account_id == account_id)
+        stmt = (
+            stmt.order_by(
+                LedgerEntry.created_at.desc(), LedgerEntry.transfer_id, LedgerEntry.role.desc()
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+        return list(self._session.scalars(stmt))
+
     def ledger_balance(self, account_id: uuid.UUID) -> int:
         stmt = select(func.coalesce(func.sum(LedgerEntry.amount_minor), 0)).where(
             LedgerEntry.account_id == account_id

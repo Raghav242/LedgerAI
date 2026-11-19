@@ -49,6 +49,15 @@ class SystemAccountNotAllowedError(BusinessRuleError):
     code = "SYSTEM_ACCOUNT_NOT_ALLOWED"
 
 
+# --- Lookups ---------------------------------------------------------------------------
+
+
+class TransferNotFoundError(DomainError):
+    """A read of a transfer id that does not exist (never a transfer rejection)."""
+
+    code = "TRANSFER_NOT_FOUND"
+
+
 # --- Idempotency protocol errors -----------------------------------------------------
 # Never stored: they describe how the key was used, not the transfer's outcome.
 

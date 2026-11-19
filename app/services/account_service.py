@@ -30,8 +30,10 @@ class AccountService:
             raise AccountNotFoundError("Account not found", {"account_id": str(account_id)})
         return account
 
-    def list_accounts(self, *, limit: int, offset: int) -> list[Account]:
-        return self._accounts.list_merchants(limit=limit, offset=offset)
+    def list_accounts(
+        self, *, limit: int, offset: int, newest_first: bool = False
+    ) -> list[Account]:
+        return self._accounts.list_merchants(limit=limit, offset=offset, newest_first=newest_first)
 
     def fund_account(
         self, account_id: uuid.UUID, amount_minor: int, *, correlation_id: str | None = None

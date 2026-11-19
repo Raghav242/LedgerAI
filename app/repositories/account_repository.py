@@ -1,7 +1,7 @@
 import uuid
 from collections.abc import Iterable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import Account, AccountKind
@@ -45,12 +45,28 @@ class AccountRepository:
                 locked[account_id] = account
         return locked
 
-    def list_merchants(self, *, limit: int, offset: int) -> list[Account]:
+    def list_merchants(
+        self, *, limit: int, offset: int, newest_first: bool = False
+    ) -> list[Account]:
+        order = (
+            (Account.created_at.desc(), Account.id.desc())
+            if newest_first
+            else (Account.created_at, Account.id)
+        )
         stmt = (
             select(Account)
             .where(Account.kind == AccountKind.MERCHANT)
-            .order_by(Account.created_at, Account.id)
+            .order_by(*order)
             .limit(limit)
             .offset(offset)
         )
         return list(self._session.scalars(stmt))
+
+    def merchant_totals(self) -> tuple[int, int]:
+        """(number of merchant accounts, sum of their balances)."""
+        count, total = self._session.execute(
+            select(func.count(Account.id), func.coalesce(func.sum(Account.balance_minor), 0)).where(
+                Account.kind == AccountKind.MERCHANT
+            )
+        ).one()
+        return int(count), int(total)

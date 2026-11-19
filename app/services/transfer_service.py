@@ -11,9 +11,11 @@ from app.core.exceptions import (
     BusinessRuleError,
     IdempotencyKeyReusedError,
     IdempotencyRequestInProgressError,
+    TransferNotFoundError,
 )
-from app.models import IdempotencyOutcome, IdempotencyRecord, Transfer, TransferKind
+from app.models import IdempotencyOutcome, IdempotencyRecord, LedgerEntry, Transfer, TransferKind
 from app.repositories.idempotency_repository import IdempotencyRepository
+from app.repositories.ledger_repository import LedgerRepository
 from app.repositories.transfer_repository import TransferRepository
 from app.schemas.common import ErrorBody
 from app.schemas.transfer import TransferRead
@@ -67,6 +69,7 @@ class TransferService:
         self._poster = LedgerPoster(session)
         self._idempotency = IdempotencyRepository(session)
         self._transfers = TransferRepository(session)
+        self._ledger = LedgerRepository(session)
 
     def create_transfer(
         self,
@@ -134,6 +137,17 @@ class TransferService:
         return self._transfers.list_all(
             account_id=account_id, kind=kind, limit=limit, offset=offset
         )
+
+    def get_transfer(self, transfer_id: uuid.UUID) -> Transfer:
+        transfer = self._transfers.get(transfer_id)
+        if transfer is None:
+            raise TransferNotFoundError("Transfer not found", {"transfer_id": str(transfer_id)})
+        return transfer
+
+    def ledger_entries_for(self, transfer_id: uuid.UUID) -> list[LedgerEntry]:
+        """The transfer's postings (debit first). 404 rather than [] for an unknown id."""
+        self.get_transfer(transfer_id)
+        return self._ledger.entries_for_transfer(transfer_id)
 
     # --- steps ------------------------------------------------------------------------
 

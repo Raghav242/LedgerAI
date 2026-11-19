@@ -1,6 +1,7 @@
 import uuid
+from typing import Annotated, Literal
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Query, status
 
 from app.api.dependencies import AccountServiceDep, LimitQuery, OffsetQuery, RequestIdHeader
 from app.api.rate_limit import ReadRateLimit, WriteRateLimit
@@ -25,9 +26,15 @@ def create_account(payload: AccountCreate, service: AccountServiceDep) -> Accoun
 
 @router.get("", summary="List accounts", dependencies=[ReadRateLimit])
 def list_accounts(
-    service: AccountServiceDep, limit: LimitQuery = 50, offset: OffsetQuery = 0
+    service: AccountServiceDep,
+    limit: LimitQuery = 50,
+    offset: OffsetQuery = 0,
+    order: Annotated[
+        Literal["asc", "desc"],
+        Query(description="By creation time: asc (oldest first, default) or desc (newest first)"),
+    ] = "asc",
 ) -> Page[AccountRead]:
-    accounts = service.list_accounts(limit=limit, offset=offset)
+    accounts = service.list_accounts(limit=limit, offset=offset, newest_first=order == "desc")
     return Page[AccountRead](
         items=[AccountRead.model_validate(a) for a in accounts], limit=limit, offset=offset
     )

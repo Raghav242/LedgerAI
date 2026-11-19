@@ -21,6 +21,7 @@ from app.core.exceptions import (
     RateLimitExceededError,
     SameAccountTransferError,
     SystemAccountNotAllowedError,
+    TransferNotFoundError,
 )
 from app.schemas.common import ErrorBody, ErrorResponse
 
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 DOMAIN_ERROR_STATUS: dict[type[DomainError], int] = {
     AccountNotFoundError: status.HTTP_404_NOT_FOUND,
+    TransferNotFoundError: status.HTTP_404_NOT_FOUND,
     InvalidAmountError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     SameAccountTransferError: status.HTTP_422_UNPROCESSABLE_CONTENT,
     CurrencyMismatchError: status.HTTP_422_UNPROCESSABLE_CONTENT,

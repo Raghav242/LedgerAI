@@ -16,6 +16,7 @@ from app.api.error_handlers import status_for_error_code
 from app.api.rate_limit import ReadRateLimit, WriteRateLimit
 from app.models import TransferKind
 from app.schemas.common import ErrorResponse, Page
+from app.schemas.ledger import LedgerEntryRead
 from app.schemas.transfer import TransferCreate, TransferRead
 from app.services.transfer_service import TransferCommand, TransferResult
 
@@ -93,3 +94,28 @@ def list_transfers(
     return Page[TransferRead](
         items=[TransferRead.model_validate(t) for t in transfers], limit=limit, offset=offset
     )
+
+
+TRANSFER_NOT_FOUND = {status.HTTP_404_NOT_FOUND: {"model": ErrorResponse}}
+
+
+@router.get(
+    "/{transfer_id}",
+    responses=TRANSFER_NOT_FOUND,
+    summary="Get one transfer",
+    dependencies=[ReadRateLimit],
+)
+def get_transfer(transfer_id: uuid.UUID, service: TransferServiceDep) -> TransferRead:
+    return TransferRead.model_validate(service.get_transfer(transfer_id))
+
+
+@router.get(
+    "/{transfer_id}/ledger-entries",
+    responses=TRANSFER_NOT_FOUND,
+    summary="The two double-entry postings of one transfer (debit first)",
+    dependencies=[ReadRateLimit],
+)
+def get_transfer_ledger_entries(
+    transfer_id: uuid.UUID, service: TransferServiceDep
+) -> list[LedgerEntryRead]:
+    return [LedgerEntryRead.model_validate(e) for e in service.ledger_entries_for(transfer_id)]

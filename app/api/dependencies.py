@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.core.principal import DEMO_PRINCIPAL, Principal
 from app.services.account_service import AccountService
+from app.services.insights_service import InsightsService
 from app.services.reconciliation_service import ReconciliationService
 from app.services.transfer_service import TransferService
 
@@ -48,9 +49,14 @@ def get_reconciliation_service(session: SessionDep) -> ReconciliationService:
     return ReconciliationService(session)
 
 
+def get_insights_service(session: SessionDep) -> InsightsService:
+    return InsightsService(session)
+
+
 AccountServiceDep = Annotated[AccountService, Depends(get_account_service)]
 TransferServiceDep = Annotated[TransferService, Depends(get_transfer_service)]
 ReconciliationServiceDep = Annotated[ReconciliationService, Depends(get_reconciliation_service)]
+InsightsServiceDep = Annotated[InsightsService, Depends(get_insights_service)]
 
 LimitQuery = Annotated[int, Query(ge=1, le=100, description="Maximum items to return")]
 OffsetQuery = Annotated[int, Query(ge=0, description="Number of items to skip")]
