@@ -5,6 +5,7 @@ LOCAL ONLY: stops and starts the api-2 container of the local Compose stack.
     python scripts/demo_load_balancing.py [--requests 20]
 """
 
+import re
 import subprocess
 import time
 from collections import Counter
@@ -29,14 +30,15 @@ def show(label: str, replicas: list[str]) -> Counter[str]:
 
 
 def nginx_retries_since(since: str) -> int:
-    """Requests NGINX had to pass to a second upstream (first one refused the connection)."""
+    """Requests NGINX had to pass to a second upstream (the first was unreachable)."""
     logs = subprocess.run(
         ["docker", "logs", "--since", since, "ledgerflow-nginx"],
         capture_output=True,
         text=True,
         check=False,
     ).stdout
-    return sum(1 for line in logs.splitlines() if "upstream_status=502, 200" in line)
+    # "upstream_status=504, 200": first replica unreachable, second one answered.
+    return sum(1 for line in logs.splitlines() if re.search(r"upstream_status=\d+, 200", line))
 
 
 def main() -> None:
@@ -52,7 +54,7 @@ def main() -> None:
     check(abs(counts["api-1"] - counts["api-2"]) <= 1, "traffic is evenly split")
 
     print("\n2) Stopping api-2 (docker compose stop api-2) ...")
-    since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())  # Z: UTC (naive = local time)
     compose("stop", "api-2")
     try:
         counts = show("   Immediately after the stop", served_by(base_url, args.requests))
@@ -60,7 +62,7 @@ def main() -> None:
         check(set(counts) == {"api-1"}, "api-1 served everything")
         print(
             f"  NGINX re-sent {nginx_retries_since(since)} request(s) whose connection to api-2 "
-            "was refused (safe: they never reached it). 0 means NGINX had already dropped "
+            "failed (safe: they never reached it). 0 means NGINX had already dropped "
             "api-2 after re-resolving Docker DNS during the graceful stop."
         )
     finally:

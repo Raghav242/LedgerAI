@@ -126,14 +126,25 @@ production:
 ### Replica count
 
 Two replicas are explicit services (`api-1`, `api-2`); `api-3` and `api-4` exist under the
-`scale4` profile. The NGINX upstream lists all four by name with `resolve`. A name that doesn't
-resolve (container not created) contributes no addresses, so the *same* config serves 1, 2
-or 4 replicas.
+`scale4` profile. The NGINX upstream list lives in its own file, chosen by
+`NGINX_UPSTREAMS`: `upstreams.2.conf` (default) or `upstreams.4.conf`. **It must list
+exactly the deployed replicas.**
 
-- 4 replicas: `docker compose --profile scale4 up -d --wait`
-- 1 replica: `docker compose stop api-2`
-- More than 4: add `api-5` (copy a service block, next fixed IP) and one
-  `server api-5:8000 resolve` line.
+- 4 replicas: `$env:NGINX_UPSTREAMS="4"; docker compose --profile scale4 up -d --wait`
+- 1 replica: `docker compose stop api-2` (a stopped replica keeps its fixed IP; NGINX
+  fails over in ≤ 0.5 s per attempt and tries every server)
+- More than 4: add `api-5` (copy a service block, next fixed IP) and an `upstreams.5.conf`.
+
+**Correction found in Phase 4A.** Phase 3 originally listed all four replicas in one
+config, relying on `resolve` to drop names that don't exist. That is unreliable:
+- NGINX removes a peer only on a definitive **NXDOMAIN**;
+- for a removed container, Docker DNS answers **SERVFAIL**, after about 7 s;
+- so with `resolver_timeout 2s` NGINX only ever saw timeouts.
+
+Either way, a replica removed while NGINX was running stayed in rotation with a dead
+address. After the 4-replica benchmark this caused 504s whenever both attempts hit a stale
+peer. The fix: exact upstream files, `resolver_timeout 10s`, and `proxy_next_upstream_tries 0`
+(try every server within 5 s). Verified: 4 → 2 → 4 → 2 transitions with no stale peers.
 
 **Why not `docker compose up --scale api=N`?** With a scaled service NGINX would have to
 resolve one name to N addresses. Open-source NGINX's `resolve` does support that, but

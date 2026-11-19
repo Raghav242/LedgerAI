@@ -55,6 +55,13 @@ ReconciliationServiceDep = Annotated[ReconciliationService, Depends(get_reconcil
 LimitQuery = Annotated[int, Query(ge=1, le=100, description="Maximum items to return")]
 OffsetQuery = Annotated[int, Query(ge=0, description="Number of items to skip")]
 
+# Set by NGINX for every request (and echoed back to the client). Carried into outbox
+# events as correlation_id so an event can be traced to the request that caused it.
+RequestIdHeader = Annotated[
+    str | None,
+    Header(alias="X-Request-ID", max_length=128, description="Request id (set by the proxy)"),
+]
+
 IdempotencyKeyHeader = Annotated[
     str,
     Header(

@@ -9,6 +9,7 @@ from app.api.dependencies import (
     LimitQuery,
     OffsetQuery,
     PrincipalDep,
+    RequestIdHeader,
     TransferServiceDep,
 )
 from app.api.error_handlers import status_for_error_code
@@ -49,6 +50,7 @@ def create_transfer(
     idempotency_key: IdempotencyKeyHeader,
     principal: PrincipalDep,
     service: TransferServiceDep,
+    request_id: RequestIdHeader = None,
 ) -> JSONResponse:
     result = service.create_transfer(
         scope=principal.scope,
@@ -59,6 +61,7 @@ def create_transfer(
             amount_minor=payload.amount_minor,
             currency=payload.currency,
         ),
+        correlation_id=request_id,
     )
     return _to_response(result)
 

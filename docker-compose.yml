@@ -50,6 +50,43 @@ x-api: &api
     redis:
       condition: service_healthy
 
+# Event workers (outbox publisher, consumer): the same image and settings as the API, a
+# different command. They serve no HTTP, so their health check is a heartbeat file that
+# the main loop touches every iteration (stale for 30 s -> unhealthy).
+x-worker: &worker
+  <<: *api
+  environment: &worker-env
+    <<: *api-env
+    RABBITMQ_HOST: rabbitmq
+    RABBITMQ_PORT: "5672"
+    RABBITMQ_USER: ${RABBITMQ_USER:-ledgerflow}
+    RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set in .env}
+    DB_POOL_SIZE: "2"
+    DB_MAX_OVERFLOW: "2"
+    OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-100}
+    OUTBOX_LEASE_SECONDS: ${OUTBOX_LEASE_SECONDS:-30}
+    CONSUMER_PREFETCH: ${CONSUMER_PREFETCH:-10}
+  extra_hosts:
+    - "redis:${BACKEND_NET:-172.28.0}.10"
+    - "postgres:${BACKEND_NET:-172.28.0}.11"
+    - "rabbitmq:${BACKEND_NET:-172.28.0}.13"
+  expose: []
+  healthcheck:
+    test:
+      - CMD
+      - python
+      - -c
+      - "import os, sys, time; sys.exit(0 if time.time() - os.path.getmtime('/tmp/ledgerflow-worker-heartbeat') < 30 else 1)"
+    interval: 5s
+    timeout: 3s
+    retries: 6
+    start_period: 20s
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    rabbitmq:
+      condition: service_healthy
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -104,6 +141,34 @@ services:
       timeout: 3s
       retries: 10
 
+  # Single-node broker: durable queues + persistent messages survive a broker RESTART,
+  # but this is NOT highly available (no replication; the node is a single point of
+  # failure). Thanks to the outbox, an outage only delays events; nothing is lost.
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    container_name: ledgerflow-rabbitmq
+    restart: unless-stopped
+    hostname: ledgerflow-rabbitmq  # the data directory is tied to the node name
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-ledgerflow}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set in .env}
+    ports:
+      # Loopback only: AMQP for the host's tests/demos, and the management UI
+      # (http://127.0.0.1:15672). Never published on the LAN.
+      - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    networks:
+      backend:
+        ipv4_address: ${BACKEND_NET:-172.28.0}.13
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
   # Runs `alembic upgrade head` exactly once per `up`, before any replica starts.
   # Replicas never migrate on their own (no race between replicas, no partial schemas).
   migrate:
@@ -155,6 +220,21 @@ services:
       backend:
         ipv4_address: ${BACKEND_NET:-172.28.0}.24
 
+  # Moves committed outbox rows to RabbitMQ. Safe to run several (SKIP LOCKED claims).
+  outbox-publisher:
+    <<: *worker
+    command: ["python", "-m", "app.events.publisher"]
+
+  # Applies events exactly once (dedup by event id) despite at-least-once delivery.
+  event-consumer:
+    <<: *worker
+    command: ["python", "-m", "app.events.consumer"]
+    environment:
+      <<: *worker-env
+      # DEVELOPMENT-ONLY fault injection used by scripts/demo_worker_crash.py.
+      CONSUMER_CRASH_BEFORE_COMMIT_EVENT: ${CONSUMER_CRASH_BEFORE_COMMIT_EVENT:-}
+      CONSUMER_CRASH_AFTER_COMMIT_EVENT: ${CONSUMER_CRASH_AFTER_COMMIT_EVENT:-}
+
   nginx:
     image: nginx:1.28-alpine
     container_name: ledgerflow-nginx
@@ -165,6 +245,8 @@ services:
       - "${NGINX_BIND:-127.0.0.1}:${NGINX_PORT:-8080}:8080"
     volumes:
       - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # Exactly the deployed replicas: NGINX_UPSTREAMS=4 together with --profile scale4.
+      - ./deploy/nginx/upstreams.${NGINX_UPSTREAMS:-2}.conf:/etc/nginx/upstreams.conf:ro
     networks:
       backend:
         ipv4_address: ${BACKEND_NET:-172.28.0}.12
@@ -183,7 +265,8 @@ networks:
   backend:
     ipam:
       config:
-        # Fixed addresses (.10 redis, .11 postgres, .12 nginx, .21-.24 api replicas) live in
+        # Fixed addresses (.10 redis, .11 postgres, .12 nginx, .13 rabbitmq, .21-.24 api
+        # replicas) live in
         # the lower half; Docker hands out dynamic addresses (migrate, load generators, ...)
         # only from the upper half, so a reserved address is never taken while its owner
         # is stopped. A replica that restarts therefore always comes back at the SAME
@@ -197,3 +280,4 @@ networks:
 
 volumes:
   pgdata:
+  rabbitmqdata:

@@ -6,6 +6,7 @@ from app.core.exceptions import AccountNotFoundError
 from app.models import Account, Transfer, TransferKind, TransferStatus
 from app.repositories.account_repository import AccountRepository
 from app.repositories.ledger_repository import LedgerRepository
+from app.repositories.outbox_repository import OutboxRepository, build_event
 from app.repositories.transfer_repository import TransferRepository
 from app.services.transfer_rules import (
     validate_account_kinds,
@@ -18,14 +19,16 @@ class LedgerPoster:
     """Applies one balanced money movement inside the caller's open transaction.
 
     Shared by merchant transfers and dev funding so that every movement of money goes
-    through the same lock -> validate -> mutate -> record sequence. It never commits:
-    the calling service owns the transaction boundary.
+    through the same lock -> validate -> mutate -> record -> outbox sequence. It never
+    commits: the calling service owns the transaction boundary, so the balance updates,
+    transfer row, ledger entries and outbox event commit (or roll back) together.
     """
 
     def __init__(self, session: Session) -> None:
         self._accounts = AccountRepository(session)
         self._transfers = TransferRepository(session)
         self._ledger = LedgerRepository(session)
+        self._outbox = OutboxRepository(session)
 
     def post(
         self,
@@ -35,6 +38,7 @@ class LedgerPoster:
         amount_minor: int,
         currency: str,
         kind: TransferKind,
+        correlation_id: str | None = None,
     ) -> Transfer:
         validate_transfer_request(source_account_id, destination_account_id, amount_minor)
 
@@ -64,6 +68,13 @@ class LedgerPoster:
             )
         )
         self._ledger.add_postings(transfer)
+
+        # 5. Transactional outbox: the event is just another row in this transaction. No
+        #    broker call here (and none while the account locks are held); the separate
+        #    publisher process delivers it after COMMIT.
+        event = build_event(transfer, correlation_id=correlation_id)
+        if event is not None:
+            self._outbox.add(event)
         return transfer
 
     @staticmethod

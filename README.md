@@ -9,7 +9,8 @@ LedgerFlow AI exists to explore how real payment systems keep balances correct. 
 means row-level locking, durable idempotency, an immutable double-entry ledger, strict
 validation of money amounts and database-enforced invariants, all in a clean, layered Python service that is easy to read and extend.
 It runs as several stateless replicas behind NGINX, with a Redis-backed rate limiter whose
-quota is shared by every replica.
+quota is shared by every replica, and publishes every committed money movement as an event
+through a transactional outbox and RabbitMQ.
 It is aimed at engineers who want a working reference for building a correct money-movement
 service.
 
@@ -27,6 +28,7 @@ service.
 - **Transfer history:** immutable records, newest first, filterable by account and kind (`transfer`, `dev_funding`, `legacy_opening_balance`).
 - **Horizontally scalable:** stateless FastAPI replicas behind an NGINX round-robin load balancer. Any replica can serve any request, including idempotent retries, and a replica can die mid-traffic without corrupting state.
 - **Distributed rate limiting:** an atomic Redis token bucket (Lua script, Redis server time, exact integer arithmetic) enforces one quota across all replicas. Writes fail closed (`503`) if Redis is unavailable, reads fail open, and a rate-limited request never opens a database session.
+- **Reliable events:** every committed transfer and funding writes a versioned event (`transfer.completed`, `account.funded`) into a transactional outbox in the same PostgreSQL transaction. A publisher delivers it to RabbitMQ with publisher confirms, and an idempotent consumer applies it exactly once despite at-least-once delivery, with bounded retries and a dead-letter queue. The API never depends on the broker.
 - **Health checks:** `/health/live` (process only) and `/health/ready` (PostgreSQL + Redis).
 - **Consistent errors:** every error shares one JSON shape with a stable machine-readable code.
 - **Interactive API docs:** OpenAPI/Swagger UI at `/docs`.
@@ -36,7 +38,13 @@ service.
 ```
                  ┌─► api-1 ─┐        ┌─► Redis       (rate-limit buckets only)
 client ─► NGINX ─┼─► api-2 ─┼────────┤
-   :8080         └─► api-N ─┘        └─► PostgreSQL  (balances, ledger, idempotency)
+   :8080         └─► api-N ─┘        └─► PostgreSQL  (balances, ledger, idempotency, outbox)
+                                                │
+                    outbox-publisher ◄──────────┘ poll (SKIP LOCKED, lease)
+                          │ confirms
+                          ▼
+                     RabbitMQ ──► event-consumer ──► PostgreSQL (receipt + effect, one txn)
+                          └─► retry tiers / DLQ
 
 inside each replica:
 FastAPI routes ──► rate limit ──► Services ──► Repositories ──► PostgreSQL
@@ -50,6 +58,7 @@ FastAPI routes ──► rate limit ──► Services ──► Repositories �
 - **Money supply:** demo money is moved from a built-in system funding account, so all account balances together always sum to zero.
 - **Scaling:** one Docker image runs every replica plus a one-shot `migrate` job (replicas never migrate). Only NGINX publishes an API port; replicas are reachable only on the internal network.
 - **Rate limiting:** a small `RateLimiter` protocol with a Redis token bucket (production) and an in-memory fixed window (comparison and tests), applied as route dependencies with separate `read` and `write` policies.
+- **Events:** `LedgerPoster` writes the outbox row next to the ledger entries. `outbox-publisher` and `event-consumer` are separate processes from the same image (`python -m app.events.publisher` / `python -m app.events.consumer`), using synchronous `pika` to match the synchronous codebase.
 - **Configuration:** environment-based settings with no hardcoded credentials.
 
 | Layer | Technology |
@@ -58,6 +67,7 @@ FastAPI routes ──► rate limit ──► Services ──► Repositories �
 | API | FastAPI, Pydantic v2, Uvicorn |
 | Database | PostgreSQL 16, SQLAlchemy 2.x, psycopg 3, Alembic |
 | Scaling | NGINX 1.28, Redis 7.4 (redis-py), Docker Compose |
+| Events | RabbitMQ 4.1 (quorum queues), pika |
 | Config | pydantic-settings |
 | Tooling | pytest, httpx, Ruff, Locust |
 
@@ -78,20 +88,25 @@ pip install -e ".[dev]"
 Copy-Item .env.example .env           # macOS/Linux: cp .env.example .env
 ```
 
-### Option A: the full stack (NGINX + 2 replicas + Redis + PostgreSQL)
+### Option A: the full stack (NGINX + 2 replicas + Redis + PostgreSQL + RabbitMQ + workers)
 
 ```powershell
 docker compose up -d --build --wait     # builds the image, migrates once, starts everything
-docker compose ps                       # api-1, api-2, nginx, postgres, redis: healthy
+docker compose ps                       # api-1, api-2, nginx, postgres, redis, rabbitmq,
+                                        # outbox-publisher, event-consumer: healthy
 ```
 
 The API is at **http://127.0.0.1:8080** (docs at `/docs`). Every response carries an
-`X-Served-By` header naming the replica that handled it.
+`X-Served-By` header naming the replica that handled it. The RabbitMQ management UI is at
+**http://127.0.0.1:15672** (credentials from `.env`).
 
 ```powershell
-docker compose --profile scale4 up -d --wait   # 4 replicas (api-3, api-4 join automatically)
+$env:NGINX_UPSTREAMS="4"; docker compose --profile scale4 up -d --wait   # 4 replicas
+Remove-Item Env:NGINX_UPSTREAMS; docker compose --profile scale4 rm -sf api-3 api-4; docker compose up -d --wait   # back to 2
 docker compose stop api-2                      # run with a single replica
 docker compose logs -f nginx api-1 api-2       # watch routing and requests
+docker compose logs -f outbox-publisher event-consumer   # watch events flow
+docker compose restart event-consumer          # each process restarts independently
 docker compose down                            # stop everything; add -v to delete the data
 ```
 
@@ -157,13 +172,14 @@ Errors use a consistent format:
 
 ## Testing and demos
 
-With PostgreSQL and Redis running (`docker compose up -d --wait postgres redis`):
+With PostgreSQL, Redis and RabbitMQ running (`docker compose up -d --wait postgres redis rabbitmq`):
 
 ```powershell
 pytest                    # unit + integration + Redis tests (stack tests excluded)
 pytest tests/unit         # fast unit tests, no services needed
 pytest -m integration     # PostgreSQL-backed tests
 pytest -m redis           # real-Redis rate limiter tests (atomicity, shared quota, restarts)
+pytest -m rabbitmq        # real-RabbitMQ delivery tests (dedup, crashes, retries, DLQ, outage)
 pytest -m stack           # end-to-end through NGINX across replicas (redeploys the stack)
 ruff check .; ruff format --check .
 ```
@@ -174,6 +190,10 @@ ruff check .; ruff format --check .
 - **Redis tests** use logical database 15 and a unique key prefix per test. Token-bucket
   timing is tested with an injected clock (no sleeps). One test starts and restarts its own
   throwaway Redis container.
+- **RabbitMQ tests** give every test its own exchange/queue name prefix on the stack's
+  broker and delete it afterwards. The broker-outage test starts and restarts its own
+  throwaway RabbitMQ container. Crashes are simulated in-process (no ack, rollback) and,
+  in the demos, with real process deaths.
 - **Stack tests** temporarily redeploy the Compose stack against a separate database
   (`ledgerflow_stacktest`) with a deterministic quota, then restore the default stack. They
   verify that both replicas serve traffic, that the quota is global, that idempotent
@@ -186,6 +206,9 @@ Demo scripts run against the live API and create their own uniquely named accoun
 python scripts/demo_load_balancing.py   # round robin, stop a replica, recover
 python scripts/demo_rate_limiting.py    # 50 concurrent writes vs a quota of 10, global; refill
 python scripts/demo_redis_failure.py    # stop Redis: writes 503 fast, reads up, clean recovery
+python scripts/demo_outbox_recovery.py  # stop RabbitMQ: transfers continue, events delivered later, once
+python scripts/demo_event_deduplication.py  # one event delivered 7 times, applied once
+python scripts/demo_worker_crash.py     # consumer really dies before/after commit; effect exactly once
 
 # Phase 2 demos (default: a local uvicorn on :8000; add --base-url http://127.0.0.1:8080)
 python scripts/demo_concurrency.py      # 100 concurrent $10 transfers from $100 → exactly 10
@@ -193,8 +216,8 @@ python scripts/demo_idempotency.py      # 20 concurrent copies of one request �
 ```
 
 Each demo verifies its invariants (including ledger reconciliation) and exits with status 1
-if one is violated. The Phase 3 demos stop or reconfigure containers and refuse to run
-against anything except `127.0.0.1`/`localhost`.
+if one is violated. Demos that stop or reconfigure containers refuse to run against
+anything except `127.0.0.1`/`localhost`, and restore what they stopped.
 
 **Benchmarks** (Locust; redeploy 1/2/4 replicas against a separate `ledgerflow_bench`
 database, then restore the default stack):
@@ -228,6 +251,13 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 | `EXPOSE_REPLICA_HEADER` | `false` (stack: `true`) | Add `X-Served-By` to responses |
 | `NGINX_PORT` / `NGINX_BIND` | `8080` / `127.0.0.1` | Published load-balancer address |
 | `BACKEND_NET` | `172.28.0` | Internal `/24` network for fixed container addresses (change only on collision) |
+| `NGINX_UPSTREAMS` | `2` | Which upstream list NGINX loads (`2` or `4`); must match the deployed replicas |
+| `RABBITMQ_USER` / `RABBITMQ_PASSWORD` | `ledgerflow` / *required for the stack* | Broker credentials (publisher, consumer, broker) |
+| `RABBITMQ_HOST` / `RABBITMQ_PORT` | `127.0.0.1` / `5672` | Broker for host-run tests/demos (workers use `rabbitmq:5672`) |
+| `OUTBOX_BATCH_SIZE` / `OUTBOX_LEASE_SECONDS` | `100` / `30` | Publisher batch size and claim lease |
+| `CONSUMER_PREFETCH` | `10` | Max unacknowledged messages per consumer |
+| `CONSUMER_RETRY_DELAYS_MS` | `[1000, 5000, 25000]` | One retry tier per entry; after the last, the DLQ |
+| `CONSUMER_DELIVERY_LIMIT` | `5` | Broker dead-letters a message redelivered more often than this |
 
 ## Notes and limitations
 
@@ -237,7 +267,10 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 - **Hot accounts serialize.** Transfers from the same account wait for each other's row lock, which bounds per-account throughput no matter how many replicas run.
 - **Scaling is bounded by shared dependencies.** All replicas share one PostgreSQL primary and one Redis; on a single machine they also share its CPUs. See the measured benchmarks.
 - **Redis restarts reset rate limits** (buckets start full): a bounded over-admission of at most one burst. Redis holds no financial data.
-- **Replica count is explicit** (`api-1` … `api-4`); adding a fifth means adding a service and one NGINX `server` line.
+- **Replica count is explicit** (`api-1` … `api-4`), and NGINX's upstream file must list exactly the deployed replicas (`NGINX_UPSTREAMS`).
+- **Events are at-least-once.** A broker or worker crash can deliver an event twice; consumers deduplicate by event id. There is no ordering guarantee across events.
+- **RabbitMQ is a single node, not highly available.** It survives restarts (durable queues, persistent messages), but losing the node or its disk loses published-but-unconsumed messages. Unpublished events are always safe in the outbox.
+- **Events start with migration `0003`.** Transfers committed before it have no events. Published outbox rows and receipts are kept indefinitely (no retention job yet).
 - **Fixed container IPs are a local workaround.** They avoid two Docker Desktop DNS problems measured during development (slow lookups for stopped containers, stale upstream addresses after restarts). Production systems use dynamic addresses with service discovery and readiness-based load-balancer membership instead; see [the design notes](docs/phase-3-design.md#fixed-ips-are-a-local-workaround-not-a-production-pattern).
 - **Phase 1 data:** migration `0002` backfills existing transfers exactly. Balances from unrecorded Phase 1 funding become one labelled `legacy_opening_balance` entry per account, and the migration aborts if a balance cannot be explained.
 - USD only.
@@ -245,7 +278,8 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 
 Design notes: [transactions and data model](docs/phase-1-design.md),
 [concurrency, idempotency and the ledger](docs/phase-2-design.md) and
-[horizontal scaling and distributed rate limiting](docs/phase-3-design.md), with diagrams
+[horizontal scaling and distributed rate limiting](docs/phase-3-design.md) and
+[transactional outbox and reliable events](docs/phase-4a-design.md), with diagrams
 and the trade-offs behind each decision.
 
 To change runtime dependencies, edit `pyproject.toml` and regenerate the image's pinned

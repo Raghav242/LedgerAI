@@ -69,10 +69,48 @@ class Settings(BaseSettings):
     # Per process. Uvicorn runs sync endpoints on a 40-thread pool, so 50 never queues.
     redis_max_connections: int = Field(default=50, ge=1)
 
+    # --- Events: transactional outbox + RabbitMQ ----------------------------------------
+    # Only the outbox publisher and event consumer talk to RabbitMQ; the API never does.
+    rabbitmq_host: str = "127.0.0.1"
+    rabbitmq_port: int = 5672
+    rabbitmq_user: str = "ledgerflow"
+    rabbitmq_password: SecretStr | None = None  # required by the publisher and consumer
+    rabbitmq_vhost: str = "/"
+    rabbitmq_heartbeat_seconds: int = Field(default=30, ge=0)
+    rabbitmq_connect_timeout_seconds: float = Field(default=5, gt=0)
+    # Prefix for exchange/queue names; tests use a unique prefix for isolation.
+    events_topology_prefix: str = "ledgerflow"
+
+    outbox_batch_size: int = Field(default=100, ge=1, le=1000)
+    # A claimed batch is "processing" for at most this long; a crashed publisher's claim
+    # then expires and another publisher re-claims (and re-publishes) the events.
+    outbox_lease_seconds: int = Field(default=30, ge=1)
+    outbox_poll_interval_ms: int = Field(default=500, ge=10)
+    outbox_retry_base_ms: int = Field(default=500, ge=1)
+    outbox_retry_max_ms: int = Field(default=60_000, ge=1)
+
+    consumer_name: str = "ledger-audit"
+    consumer_prefetch: int = Field(default=10, ge=1, le=1000)
+    # Delays of the retry tiers for transient failures; one tier per retry attempt, so
+    # the number of tiers is the retry limit. After that the event is dead-lettered.
+    consumer_retry_delays_ms: list[int] = Field(default=[1_000, 5_000, 25_000], min_length=1)
+    # A message redelivered more often than this (e.g. it crashes the consumer every
+    # time) is dead-lettered by RabbitMQ itself (quorum queue delivery limit).
+    consumer_delivery_limit: int = Field(default=5, ge=1)
+    # DEVELOPMENT-ONLY fault injection for the worker-crash demo: hard-exit the consumer
+    # while processing this event id, before or after its database commit. Refused in
+    # production.
+    consumer_crash_before_commit_event: str | None = None
+    consumer_crash_after_commit_event: str | None = None
+
     @model_validator(mode="after")
     def _forbid_unsafe_production_settings(self) -> "Settings":
         if self.app_env == "production" and self.enable_dev_endpoints:
             raise ValueError("ENABLE_DEV_ENDPOINTS must be false when APP_ENV=production")
+        if self.app_env == "production" and (
+            self.consumer_crash_before_commit_event or self.consumer_crash_after_commit_event
+        ):
+            raise ValueError("Consumer fault injection is not allowed when APP_ENV=production")
         if self.app_env == "production" and self.rate_limit_backend == "memory":
             raise ValueError(
                 "RATE_LIMIT_BACKEND=memory is per-process and not a real limit behind a "

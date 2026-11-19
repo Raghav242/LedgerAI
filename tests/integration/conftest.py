@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import Settings
 from app.core.database import CONNECT_TIMEOUT_SECONDS, create_db_engine, create_session_factory
 from app.main import create_app
+from tests.integration.messaging import event_settings, rabbit_available  # noqa: F401
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAFE_DB_NAME = re.compile(r"^[a-z_][a-z0-9_]*_test$")
@@ -121,7 +122,12 @@ def reset_database(engine: Engine) -> None:
     exactly what test cleanup needs and what the application can never do.
     """
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE TABLE idempotency_records, ledger_entries, transfers"))
+        conn.execute(
+            text(
+                "TRUNCATE TABLE idempotency_records, ledger_entries, transfers, "
+                "outbox_events, processed_events, event_audit_log"
+            )
+        )
         conn.execute(text("DELETE FROM accounts WHERE kind <> 'system'"))
         conn.execute(text("UPDATE accounts SET balance_minor = 0 WHERE kind = 'system'"))
 

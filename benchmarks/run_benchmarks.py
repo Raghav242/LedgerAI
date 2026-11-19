@@ -90,6 +90,8 @@ class Result:
 def configure(replicas: int, env: dict[str, str]) -> None:
     stack_control.remove_extra_replicas()
     profiles = ("scale4",) if replicas == 4 else ()
+    # NGINX must list exactly the deployed replicas (see deploy/nginx/nginx.conf).
+    env = {**env, "NGINX_UPSTREAMS": "4" if replicas == 4 else "2"}
     stack_control.deploy(env, profiles=profiles)
     if replicas == 1:
         stack_control.compose("stop", "api-2")

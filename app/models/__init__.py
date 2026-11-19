@@ -12,6 +12,7 @@ from app.models.enums import (
 )
 from app.models.idempotency_record import IdempotencyRecord
 from app.models.ledger_entry import LedgerEntry
+from app.models.outbox import EventAuditEntry, OutboxEvent, ProcessedEvent
 from app.models.transfer import Transfer
 
 __all__ = [
@@ -20,10 +21,13 @@ __all__ = [
     "AccountKind",
     "Base",
     "Currency",
+    "EventAuditEntry",
     "IdempotencyOutcome",
     "IdempotencyRecord",
     "LedgerEntry",
     "LedgerEntryRole",
+    "OutboxEvent",
+    "ProcessedEvent",
     "Transfer",
     "TransferKind",
     "TransferStatus",

@@ -2,7 +2,7 @@ import uuid
 
 from fastapi import APIRouter, status
 
-from app.api.dependencies import AccountServiceDep, LimitQuery, OffsetQuery
+from app.api.dependencies import AccountServiceDep, LimitQuery, OffsetQuery, RequestIdHeader
 from app.api.rate_limit import ReadRateLimit, WriteRateLimit
 from app.schemas.account import AccountBalance, AccountCreate, AccountFund, AccountRead
 from app.schemas.common import ErrorResponse, Page
@@ -69,6 +69,10 @@ dev_router = APIRouter(prefix="/accounts", tags=["development only"])
     ),
 )
 def fund_account(
-    account_id: uuid.UUID, payload: AccountFund, service: AccountServiceDep
+    account_id: uuid.UUID,
+    payload: AccountFund,
+    service: AccountServiceDep,
+    request_id: RequestIdHeader = None,
 ) -> AccountRead:
-    return AccountRead.model_validate(service.fund_account(account_id, payload.amount_minor))
+    account = service.fund_account(account_id, payload.amount_minor, correlation_id=request_id)
+    return AccountRead.model_validate(account)

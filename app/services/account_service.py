@@ -33,7 +33,9 @@ class AccountService:
     def list_accounts(self, *, limit: int, offset: int) -> list[Account]:
         return self._accounts.list_merchants(limit=limit, offset=offset)
 
-    def fund_account(self, account_id: uuid.UUID, amount_minor: int) -> Account:
+    def fund_account(
+        self, account_id: uuid.UUID, amount_minor: int, *, correlation_id: str | None = None
+    ) -> Account:
         """DEVELOPMENT ONLY: move simulated money from the system funding account.
 
         A normal double-entry movement (debit system account, credit merchant) under the
@@ -53,6 +55,7 @@ class AccountService:
                 amount_minor=amount_minor,
                 currency=Currency.USD,  # the only supported currency
                 kind=TransferKind.DEV_FUNDING,
+                correlation_id=correlation_id,
             )
             account = self._accounts.get(account_id)  # identity map: the locked, updated row
         assert account is not None

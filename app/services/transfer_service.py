@@ -69,7 +69,12 @@ class TransferService:
         self._transfers = TransferRepository(session)
 
     def create_transfer(
-        self, *, scope: str, idempotency_key: str, command: TransferCommand
+        self,
+        *,
+        scope: str,
+        idempotency_key: str,
+        command: TransferCommand,
+        correlation_id: str | None = None,
     ) -> TransferResult:
         """Execute a transfer at most once per (scope, idempotency_key).
 
@@ -77,8 +82,9 @@ class TransferService:
           1. INSERT the idempotency claim (waits if a same-key request is in flight).
           2. Lock both accounts in ID order, validate, update balances, insert the
              transfer and its two ledger entries.
-          3. Store the response snapshot on the claim row.
-          4. COMMIT once: money movement and idempotency outcome become durable together.
+          3. Write the transfer.completed outbox event (same transaction).
+          4. Store the response snapshot on the claim row.
+          5. COMMIT once: money movement, event and idempotency outcome become durable together.
 
         Business rejections (insufficient funds, unknown account, ...) are rolled back to a
         SAVEPOINT taken after the claim, then stored as the key's final outcome, so a retry
@@ -92,7 +98,7 @@ class TransferService:
             if record is None:
                 result = self._replay(scope, idempotency_key, fingerprint)
             else:
-                result = self._execute(record, command)
+                result = self._execute(record, command, correlation_id)
 
         # Logged only after COMMIT: no I/O beyond the database while row locks are held.
         if result.replayed:
@@ -171,7 +177,9 @@ class TransferService:
             transfer_id=record.transfer_id,
         )
 
-    def _execute(self, record: IdempotencyRecord, command: TransferCommand) -> TransferResult:
+    def _execute(
+        self, record: IdempotencyRecord, command: TransferCommand, correlation_id: str | None
+    ) -> TransferResult:
         try:
             with self._session.begin_nested():  # SAVEPOINT
                 transfer = self._poster.post(
@@ -180,6 +188,7 @@ class TransferService:
                     amount_minor=command.amount_minor,
                     currency=command.currency,
                     kind=TransferKind.TRANSFER,
+                    correlation_id=correlation_id,
                 )
         except BusinessRuleError as exc:
             # ROLLBACK TO SAVEPOINT already happened: no balance or ledger change survives,

@@ -182,3 +182,83 @@ def postgres_client_connections(database: str) -> int:
         check=True,
     ).stdout.strip()
     return int(out or 0)
+
+
+# --- event pipeline helpers (Phase 4A) ---------------------------------------------------
+
+
+def db_query(sql: str, params: dict | None = None, *, database: str | None = None) -> list:
+    """Read-only query against a stack database (default: the dev database)."""
+    from sqlalchemy import create_engine, text
+
+    from app.core.config import Settings
+
+    settings = Settings()  # type: ignore[call-arg]
+    url = settings.build_database_url(database or settings.postgres_db)
+    engine = create_engine(url, pool_pre_ping=True)
+    try:
+        with engine.connect() as conn:
+            return list(conn.execute(text(sql), params or {}).all())
+    finally:
+        engine.dispose()
+
+
+def db_execute(sql: str, params: dict | None = None, *, database: str | None = None) -> int:
+    """Write to a stack database in its own committed transaction. Returns rowcount."""
+    from sqlalchemy import create_engine, text
+
+    from app.core.config import Settings
+
+    settings = Settings()  # type: ignore[call-arg]
+    engine = create_engine(settings.build_database_url(database or settings.postgres_db))
+    try:
+        with engine.begin() as conn:
+            return conn.execute(text(sql), params or {}).rowcount
+    finally:
+        engine.dispose()
+
+
+def queue_depths(prefix: str = "ledgerflow") -> dict[str, tuple[int, int]]:
+    """{queue: (ready, unacked)} for the stack's queues, via rabbitmqctl in the container."""
+    out = subprocess.run(
+        [
+            "docker",
+            "exec",
+            "ledgerflow-rabbitmq",
+            "rabbitmqctl",
+            "-q",
+            "list_queues",
+            "name",
+            "messages_ready",
+            "messages_unacknowledged",
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    depths = {}
+    for line in out.splitlines()[1:]:
+        name, ready, unacked = line.split("\t")
+        if name.startswith(prefix + "."):
+            depths[name] = (int(ready), int(unacked))
+    return depths
+
+
+def wait_until(condition, *, timeout: float = 60, interval: float = 0.5, what: str = "") -> None:  # type: ignore[no-untyped-def]
+    """Bounded polling of an observable condition."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return
+        time.sleep(interval)
+    raise TimeoutError(f"timed out after {timeout}s waiting for {what or condition}")
+
+
+def container_restart_count(container: str) -> int:
+    out = subprocess.run(
+        ["docker", "inspect", "-f", "{{.RestartCount}}", container],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    return int(out or 0)
