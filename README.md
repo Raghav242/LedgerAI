@@ -14,6 +14,13 @@ through a transactional outbox and RabbitMQ.
 It is aimed at engineers who want a working reference for building a correct money-movement
 service.
 
+A React frontend, the **Distributed Systems Lab**, makes all of this observable: create
+accounts, add simulated funds, send idempotent transfers and watch which replica answered,
+what the rate limiter said, and how the double-entry ledger and reconciliation stay
+consistent. All money is simulated virtual USD.
+
+![LedgerFlow AI overview](docs/screenshots/overview.png)
+
 ## Features
 
 - **Virtual accounts:** create, look up and list merchant accounts with USD balances that start at zero.
@@ -29,6 +36,7 @@ service.
 - **Horizontally scalable:** stateless FastAPI replicas behind an NGINX round-robin load balancer. Any replica can serve any request, including idempotent retries, and a replica can die mid-traffic without corrupting state.
 - **Distributed rate limiting:** an atomic Redis token bucket (Lua script, Redis server time, exact integer arithmetic) enforces one quota across all replicas. Writes fail closed (`503`) if Redis is unavailable, reads fail open, and a rate-limited request never opens a database session.
 - **Reliable events:** every committed transfer and funding writes a versioned event (`transfer.completed`, `account.funded`) into a transactional outbox in the same PostgreSQL transaction. A publisher delivers it to RabbitMQ with publisher confirms, and an idempotent consumer applies it exactly once despite at-least-once delivery, with bounded retries and a dead-letter queue. The API never depends on the broker.
+- **Distributed Systems Lab frontend:** React + TypeScript dashboard with a transaction playground (idempotency-key lifecycle, retry-with-same-key, replay, 429/503 handling), transaction history with ledger drill-down, and live reconciliation. See [Frontend](#frontend-distributed-systems-lab).
 - **Health checks:** `/health/live` (process only) and `/health/ready` (PostgreSQL + Redis).
 - **Consistent errors:** every error shares one JSON shape with a stable machine-readable code.
 - **Interactive API docs:** OpenAPI/Swagger UI at `/docs`.
@@ -120,6 +128,47 @@ uvicorn app.main:create_app --factory --reload --host 127.0.0.1 --port 8000
 
 The API is at **http://127.0.0.1:8000** and uses the stack's Redis through its loopback port.
 
+## Frontend (Distributed Systems Lab)
+
+**Prerequisites:** Node.js 20.19+ (22 LTS tested) and the backend stack running (Option A).
+
+```powershell
+docker compose up -d --build --wait     # backend: NGINX on 127.0.0.1:8080
+cd frontend
+npm install
+npm run dev                             # http://127.0.0.1:5173
+```
+
+The dev server proxies `/api` and `/health` to NGINX at `127.0.0.1:8080` (override with
+`LEDGERFLOW_API_PROXY_TARGET` in `frontend/.env.local`; see `frontend/.env.example`), so the
+browser makes same-origin requests and the backend needs no CORS configuration. Adding
+simulated funds requires `ENABLE_DEV_ENDPOINTS=true` (the default in `.env.example`).
+
+| Page | Status | What it shows |
+|---|---|---|
+| Overview | live | account/transfer/volume totals, reconciliation and API status, 14-day activity, recent transactions |
+| Transaction Playground | live | create and fund accounts; transfers with a visible Idempotency-Key, outcome classification, same-key retry and replay, serving replica, rate-limit headers, attempt timeline |
+| Transaction History | live | filter by account/type, server-side pagination, detail drawer with the transfer's ledger entries |
+| Ledger & Reconciliation | live | double-entry explainer (labelled example), live reconciliation invariants, paged ledger postings |
+| Experiment Lab, System Topology, AI Anomaly Lab, Performance Lab | planned | roadmap pages, clearly marked; no fake controls |
+
+```powershell
+npm run typecheck      # tsc, strict
+npm run lint           # ESLint
+npm test               # Vitest + React Testing Library (mocked HTTP)
+npm run build          # production bundle in frontend/dist
+npm run preview        # serve the build on http://127.0.0.1:4173 (same proxy)
+npm run test:e2e       # Playwright against the REAL stack (uses installed Edge; PW_CHANNEL=chrome for Chrome)
+npm run gen:api        # regenerate src/types/openapi.gen.ts from the running backend's OpenAPI
+```
+
+The end-to-end test creates uniquely named `E2E …` accounts with simulated money in the
+development database. Design notes: [docs/phase-5a-design.md](docs/phase-5a-design.md).
+
+> **Do not expose the frontend or the API publicly.** There is no authentication: every
+> caller acts as the demo merchant, and the funding endpoint mints simulated money. Both
+> servers bind to `127.0.0.1` by default.
+
 ## API
 
 | Method | Endpoint | Description |
@@ -128,12 +177,16 @@ The API is at **http://127.0.0.1:8000** and uses the stack's Redis through its l
 | `GET` | `/health/live` | Liveness (process only) and replica id |
 | `GET` | `/health/ready` | Readiness: PostgreSQL and Redis |
 | `POST` | `/api/v1/accounts` | Create an account |
-| `GET` | `/api/v1/accounts` | List accounts (`limit`, `offset`) |
+| `GET` | `/api/v1/accounts` | List accounts (`limit`, `offset`, `order=asc\|desc`) |
 | `GET` | `/api/v1/accounts/{id}` | Get an account |
 | `GET` | `/api/v1/accounts/{id}/balance` | Get an account balance |
 | `POST` | `/api/v1/accounts/{id}/fund` | Add simulated funds (**development only**) |
 | `POST` | `/api/v1/transfers` | Transfer funds between accounts (requires `Idempotency-Key`) |
 | `GET` | `/api/v1/transfers` | Transfer history (`account_id`, `kind`, `limit`, `offset`) |
+| `GET` | `/api/v1/transfers/{id}` | Get one transfer |
+| `GET` | `/api/v1/transfers/{id}/ledger-entries` | The transfer's debit and credit postings |
+| `GET` | `/api/v1/ledger/entries` | Ledger postings, newest first (`account_id`, `limit`, `offset`) |
+| `GET` | `/api/v1/stats/summary` | Totals by transfer kind and daily activity (`activity_days`, one snapshot) |
 | `GET` | `/api/v1/reconciliation` | Check balances against the ledger |
 
 Amounts are integers in minor units, so `2550` means $25.50.
@@ -273,13 +326,15 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 - **Events start with migration `0003`.** Transfers committed before it have no events. Published outbox rows and receipts are kept indefinitely (no retention job yet).
 - **Fixed container IPs are a local workaround.** They avoid two Docker Desktop DNS problems measured during development (slow lookups for stopped containers, stale upstream addresses after restarts). Production systems use dynamic addresses with service discovery and readiness-based load-balancer membership instead; see [the design notes](docs/phase-3-design.md#fixed-ips-are-a-local-workaround-not-a-production-pattern).
 - **Phase 1 data:** migration `0002` backfills existing transfers exactly. Balances from unrecorded Phase 1 funding become one labelled `legacy_opening_balance` entry per account, and the migration aborts if a balance cannot be explained.
+- **Frontend lists are bounded.** The account picker shows the newest 100 accounts (no search endpoint), and list endpoints return no total counts, so history uses previous/next pagination.
 - USD only.
 - On Windows, use `POSTGRES_HOST=127.0.0.1` rather than `localhost`. `localhost` may try IPv6 first and hang against Docker Desktop's port binding.
 
 Design notes: [transactions and data model](docs/phase-1-design.md),
 [concurrency, idempotency and the ledger](docs/phase-2-design.md) and
 [horizontal scaling and distributed rate limiting](docs/phase-3-design.md) and
-[transactional outbox and reliable events](docs/phase-4a-design.md), with diagrams
+[transactional outbox and reliable events](docs/phase-4a-design.md) and
+[the frontend and transaction playground](docs/phase-5a-design.md), with diagrams
 and the trade-offs behind each decision.
 
 To change runtime dependencies, edit `pyproject.toml` and regenerate the image's pinned
