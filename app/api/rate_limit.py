@@ -7,12 +7,14 @@ session, never claims an Idempotency-Key and never reaches a service.
 
 import logging
 from dataclasses import dataclass
+from typing import Literal
 
 from fastapi import Depends, Request
 
 from app.api.dependencies import PrincipalDep
 from app.core.config import Settings
 from app.core.exceptions import RateLimiterUnavailableError, RateLimitExceededError
+from app.core.principal import Principal
 from app.rate_limiting import RateLimitDecision, RateLimiter, RateLimitPolicy
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,29 @@ class RateLimits:
     limiter: RateLimiter
     read: RateLimitPolicy
     write: RateLimitPolicy
+    # Experiment Lab traffic in "burst" mode (concurrency, idempotency, load-balancing
+    # experiments) still goes through the real limiter, but under a large per-run quota:
+    # those experiments are about locking and routing, not quotas. The rate-limiting
+    # experiment uses the normal policies above on its own per-run bucket.
+    lab_burst_read: RateLimitPolicy | None = None
+    lab_burst_write: RateLimitPolicy | None = None
+
+    def policy_for(self, principal: Principal, kind: Literal["read", "write"]) -> RateLimitPolicy:
+        if principal.lab_rate_mode == "burst":
+            lab = self.lab_burst_read if kind == "read" else self.lab_burst_write
+            if lab is not None:
+                return lab
+        return self.read if kind == "read" else self.write
+
+
+LAB_BURST_CAPACITY = 1_000
+
+
+def build_lab_burst_policies() -> tuple[RateLimitPolicy, RateLimitPolicy]:
+    """Large per-run buckets; same fail-open/fail-closed behaviour as the real policies."""
+    read = RateLimitPolicy("lab-burst-read", LAB_BURST_CAPACITY, LAB_BURST_CAPACITY, 1000, True)
+    write = RateLimitPolicy("lab-burst-write", LAB_BURST_CAPACITY, LAB_BURST_CAPACITY, 1000, False)
+    return read, write
 
 
 def build_policies(settings: Settings) -> tuple[RateLimitPolicy, RateLimitPolicy]:
@@ -80,11 +105,11 @@ def _enforce(request: Request, scope: str, policy: RateLimitPolicy) -> None:
 
 
 def enforce_read_limit(request: Request, principal: PrincipalDep) -> None:
-    _enforce(request, principal.scope, request.app.state.rate_limits.read)
+    _enforce(request, principal.scope, request.app.state.rate_limits.policy_for(principal, "read"))
 
 
 def enforce_write_limit(request: Request, principal: PrincipalDep) -> None:
-    _enforce(request, principal.scope, request.app.state.rate_limits.write)
+    _enforce(request, principal.scope, request.app.state.rate_limits.policy_for(principal, "write"))
 
 
 ReadRateLimit = Depends(enforce_read_limit)

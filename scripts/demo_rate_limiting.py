@@ -26,7 +26,8 @@ from demo_common import (
 )
 from stack_control import deploy, ensure_local, reset_rate_limits, restore_default, wait_ready
 
-from app.rate_limiting import InMemoryFixedWindowLimiter, RateLimitPolicy
+from app.lab.experiments.rate_limiting import per_replica_counterfactual as counterfactual_for
+from app.rate_limiting import RateLimitPolicy
 
 CAPACITY = 10
 REFILL_TOKENS = 1
@@ -68,15 +69,9 @@ def send_until_rejected(client: httpx.Client, source: str, destination: str) -> 
 
 
 def per_replica_counterfactual(responses: list[httpx.Response]) -> int:
-    """How many of the same requests independent per-replica limiters would admit."""
-    clock_ms = 0  # the whole burst falls into one fixed window
-    limiters: dict[str, InMemoryFixedWindowLimiter] = {}
-    admitted = 0
-    for response in responses:
-        replica = response.headers.get("X-Served-By", "?")
-        limiter = limiters.setdefault(replica, InMemoryFixedWindowLimiter(lambda: clock_ms))
-        admitted += limiter.allow_request("demo-merchant", POLICY).allowed
-    return admitted
+    """How many of the same requests independent per-replica limiters would admit
+    (shared with the Experiment Lab: app/lab/experiments/rate_limiting.py)."""
+    return counterfactual_for([r.headers.get("X-Served-By", "?") for r in responses], POLICY)
 
 
 def main() -> None:

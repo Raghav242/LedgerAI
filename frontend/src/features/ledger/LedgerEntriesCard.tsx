@@ -28,7 +28,7 @@ export function LedgerEntriesCard() {
     <Card className="gap-0 pb-0">
       <CardHeader className="pb-4">
         <CardTitle>Ledger postings</CardTitle>
-        <CardDescription>GET /api/v1/ledger/entries · newest first, debit and credit of each transfer side by side</CardDescription>
+        <CardDescription>Newest first; each transfer is one debit and one credit.</CardDescription>
         <CardAction className="flex items-center gap-2">
           {query.isFetching && !query.isLoading && <InlineSpinner label="Updating" />}
           <DataSourceTag kind="live" />

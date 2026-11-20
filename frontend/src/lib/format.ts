@@ -32,3 +32,14 @@ export function shortId(id: string): string {
 export function formatCount(n: number): string {
   return new Intl.NumberFormat("en-US").format(n);
 }
+
+/** "just now", "3 min ago", "2 h ago", otherwise a short date. */
+export function formatRelative(iso: string, now: number = Date.now()): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return iso;
+  const s = Math.round((now - t) / 1000);
+  if (s < 45) return "just now";
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min ago`;
+  if (s < 86_400) return `${Math.round(s / 3600)} h ago`;
+  return shortDateTime.format(new Date(t));
+}

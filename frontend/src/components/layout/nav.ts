@@ -37,8 +37,14 @@ export const NAV_ITEMS: NavItem[] = [
     status: "live",
     description: "Double-entry postings and invariant checks",
   },
-  { to: "/experiments", label: "Experiment Lab", icon: FlaskConical, status: "planned", phase: "5B", description: "Controlled concurrency, idempotency and failure experiments" },
-  { to: "/topology", label: "System Topology", icon: Network, status: "planned", phase: "5C", description: "Architecture and (later) live service status" },
+  {
+    to: "/experiments",
+    label: "Experiment Lab",
+    icon: FlaskConical,
+    status: "live",
+    description: "Run bounded concurrency, idempotency, rate-limit and load-balancing experiments",
+  },
+  { to: "/topology", label: "System Topology", icon: Network, status: "live", description: "Architecture and request flows (static; live status in 5C)" },
   { to: "/anomalies", label: "AI Anomaly Lab", icon: BrainCircuit, status: "planned", phase: "4B", description: "Isolation Forest anomaly detection (backend not built yet)" },
   { to: "/performance", label: "Performance Lab", icon: Gauge, status: "planned", phase: "5D", description: "Benchmarks across replica counts and configurations" },
 ];

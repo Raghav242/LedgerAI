@@ -31,6 +31,9 @@ x-api: &api
     RATE_LIMIT_READ_CAPACITY: ${RATE_LIMIT_READ_CAPACITY:-100}
     RATE_LIMIT_READ_REFILL_TOKENS: ${RATE_LIMIT_READ_REFILL_TOKENS:-50}
     RATE_LIMIT_READ_REFILL_INTERVAL_MS: ${RATE_LIMIT_READ_REFILL_INTERVAL_MS:-1000}
+    # Experiment Lab (only active with ENABLE_DEV_ENDPOINTS=true): the runner sends its
+    # measured traffic through NGINX on the internal network, like any other client.
+    LAB_TARGET_BASE_URL: ${LAB_TARGET_BASE_URL:-http://nginx:8080}
   # Names of the stateful dependencies are pinned in /etc/hosts. When a container stops,
   # Docker DNS stops resolving its name and getaddrinfo() then takes ~7 s (the query is
   # forwarded to the host's resolvers) -- no socket timeout covers that. With fixed

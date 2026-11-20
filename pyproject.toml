@@ -18,6 +18,8 @@ dependencies = [
     "alembic>=1.14,<2.0",
     "redis>=6.0,<9.0",
     "pika>=1.3,<2.0",
+    # Experiment Lab runner (Phase 5B): sends measured traffic through NGINX.
+    "httpx>=0.27,<1.0",
 ]
 
 [project.optional-dependencies]

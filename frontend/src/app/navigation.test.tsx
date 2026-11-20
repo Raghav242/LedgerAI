@@ -44,10 +44,13 @@ describe("application navigation", () => {
     stubBackend();
     renderApp("/");
     const nav = screen.getByRole("navigation", { name: "Main" });
-    for (const label of ["Experiment Lab", "System Topology", "AI Anomaly Lab", "Performance Lab"]) {
+    for (const label of ["AI Anomaly Lab", "Performance Lab"]) {
       expect(within(within(nav).getByRole("link", { name: new RegExp(label) })).getByText("Planned")).toBeInTheDocument();
     }
-    expect(within(within(nav).getByRole("link", { name: /Transaction Playground/ })).queryByText("Planned")).toBeNull();
+    // Phase 5B made these two functional.
+    for (const label of ["Transaction Playground", "Experiment Lab", "System Topology"]) {
+      expect(within(within(nav).getByRole("link", { name: new RegExp(label) })).queryByText("Planned")).toBeNull();
+    }
   });
 
   it("navigates between pages from the sidebar", async () => {
@@ -61,11 +64,24 @@ describe("application navigation", () => {
     await user.click(within(nav).getByRole("link", { name: /Ledger & Reconciliation/ }));
     expect(await screen.findByRole("heading", { name: "Ledger & Reconciliation" })).toBeInTheDocument();
 
-    await user.click(within(nav).getByRole("link", { name: /Experiment Lab/ }));
-    expect(await screen.findByRole("heading", { name: "Experiment Lab" })).toBeInTheDocument();
-    expect(screen.getByText(/Planned for Phase 5B: not functional yet/)).toBeInTheDocument();
+    await user.click(within(nav).getByRole("link", { name: /Performance Lab/ }));
+    expect(await screen.findByRole("heading", { name: "Performance Lab" })).toBeInTheDocument();
+    expect(screen.getByText(/Planned for Phase 5D: not functional yet/)).toBeInTheDocument();
     // No fake "Run" controls on planned pages.
     expect(screen.queryByRole("button", { name: /run/i })).toBeNull();
+
+    await user.click(within(nav).getByRole("link", { name: /System Topology/ }));
+    expect(await screen.findByRole("heading", { name: "System Topology" })).toBeInTheDocument();
+  });
+
+  it("offers the same navigation from the menu button on small screens", async () => {
+    stubBackend();
+    const { user } = renderApp("/");
+    await user.click(screen.getByRole("button", { name: "Open navigation" }));
+    const sheet = await screen.findByRole("dialog");
+    await user.click(within(sheet).getByRole("link", { name: /Experiment Lab/ }));
+    expect(await screen.findByRole("heading", { name: "Experiment Lab" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("shows a not-found page for unknown routes", async () => {

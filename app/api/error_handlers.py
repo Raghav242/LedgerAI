@@ -23,6 +23,7 @@ from app.core.exceptions import (
     SystemAccountNotAllowedError,
     TransferNotFoundError,
 )
+from app.lab.errors import LabRunInProgressError, LabRunNotFoundError
 from app.schemas.common import ErrorBody, ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,9 @@ DOMAIN_ERROR_STATUS: dict[type[DomainError], int] = {
     RateLimitExceededError: status.HTTP_429_TOO_MANY_REQUESTS,
     # Writes fail closed while the shared limiter is unreachable; nothing executed.
     RateLimiterUnavailableError: status.HTTP_503_SERVICE_UNAVAILABLE,
+    # Experiment Lab: one run at a time; unknown run id.
+    LabRunInProgressError: status.HTTP_409_CONFLICT,
+    LabRunNotFoundError: status.HTTP_404_NOT_FOUND,
 }
 _STATUS_BY_CODE = {cls.code: code for cls, code in DOMAIN_ERROR_STATUS.items()}
 RETRYABLE_ERRORS = (

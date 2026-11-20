@@ -13,14 +13,12 @@ from typing import Any, NoReturn
 
 import httpx
 
-# Safe to retry with the SAME request (and the same Idempotency-Key): nothing executed,
-# or the outcome is unknown and the key makes the retry safe.
-RETRYABLE_CODES = {
-    "CONCURRENCY_CONFLICT",
-    "IDEMPOTENCY_REQUEST_IN_PROGRESS",
-    "OUTCOME_UNKNOWN",
-    "RATE_LIMITED",
-}
+# The retry contract and request shape are shared with the browser Experiment Lab
+# (app/lab/traffic.py), so terminal demos and lab runs behave identically.
+from app.lab.traffic import RETRYABLE_CODES, transfer_body
+
+__all__ = ["RETRYABLE_CODES", "transfer_body"]
+
 MAX_ATTEMPTS = 120
 DIRECT_API_URL = "http://127.0.0.1:8000"  # a locally run uvicorn
 NGINX_URL = "http://127.0.0.1:8080"  # the Compose stack's load balancer
@@ -90,15 +88,6 @@ def balance(client: httpx.Client, account_id: str) -> int:
     response = client.get(f"/api/v1/accounts/{account_id}/balance")
     response.raise_for_status()
     return response.json()["balance_minor"]
-
-
-def transfer_body(source: str, destination: str, amount_minor: int) -> dict[str, Any]:
-    return {
-        "source_account_id": source,
-        "destination_account_id": destination,
-        "amount_minor": amount_minor,
-        "currency": "USD",
-    }
 
 
 def error_code(response: httpx.Response) -> str | None:

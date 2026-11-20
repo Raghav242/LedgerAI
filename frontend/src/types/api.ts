@@ -26,6 +26,22 @@ export type TransferKindSummary = Schemas["TransferKindSummary"];
 export type ErrorBody = Schemas["ErrorBody"];
 export type ErrorResponse = Schemas["ErrorResponse"];
 
+// --- Experiment Lab (Phase 5B) ---
+export type ExperimentDefinition = Schemas["ExperimentDefinition"];
+export type ExperimentId = ExperimentDefinition["id"];
+export type ParamSpec = Schemas["ParamSpec"];
+export type LabRun = Schemas["LabRunRead"];
+export type LabRunStatus = LabRun["status"];
+export type LabRunSummary = Schemas["LabRunSummary"];
+export type LabRunResult = Schemas["LabRunResult"];
+export type LabMetric = Schemas["LabMetric"];
+export type LabCheck = Schemas["LabCheck"];
+export type LabProgress = Schemas["LabProgress"];
+export type LabEvent = Schemas["LabEvent"];
+export type LabEventPage = Schemas["LabEventPage"];
+export type LabRequestObservation = Schemas["LabRequestObservation"];
+export type RequestOutcome = LabRequestObservation["outcome"];
+
 export interface Page<T> {
   items: T[];
   limit: number;

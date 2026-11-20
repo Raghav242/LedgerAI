@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { accountsPage, apiError, json, mockApi, readyOk, transferBody } from "@/test/mockApi";
 import { renderApp } from "@/test/render";
@@ -29,13 +29,19 @@ describe("Overview", () => {
       "GET /api/v1/transfers": () => json({ items: [transferBody()], limit: 8, offset: 0 }),
       "GET /api/v1/reconciliation": () => json(reconciliation),
     });
-    renderApp("/");
+    const { user } = renderApp("/");
     expect(await screen.findByText("67")).toBeInTheDocument();
     expect(screen.getByText("166")).toBeInTheDocument();
     expect(screen.getByText("$909.84")).toBeInTheDocument();
     expect(screen.getByText("$64,360.50")).toBeInTheDocument();
-    expect(await screen.findByText("Passed: every balance matches the ledger")).toBeInTheDocument();
-    expect(await screen.findByText("Ready: PostgreSQL and Redis reachable")).toBeInTheDocument();
+    const status = screen.getByRole("region", { name: "System status" });
+    expect(await within(status).findByText("Ledger balanced")).toBeInTheDocument();
+    expect(await within(status).findByText("API ready")).toBeInTheDocument();
+    // Dependency details are one click away.
+    expect(within(status).queryByText(/Ready: PostgreSQL and Redis reachable/)).toBeNull();
+    await user.click(within(status).getByRole("button", { name: "Status details" }));
+    expect(within(status).getByText(/Ready: PostgreSQL and Redis reachable · database ok · redis ok · answered by api-1/)).toBeInTheDocument();
+    expect(within(status).getByText(/Passed: every balance matches the ledger/)).toBeInTheDocument();
     expect(await screen.findByText("Alice Coffee")).toBeInTheDocument(); // recent transfer source name
     expect(screen.getByText(/3 merchant transfers/)).toBeInTheDocument();
   });

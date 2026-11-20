@@ -55,7 +55,9 @@ test("create, fund, transfer, and verify through the real API", async ({ page })
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   await expect(page.getByRole("button", { name: "API connected" })).toBeVisible();
-  await expect(page.getByText("Passed: every balance matches the ledger")).toBeVisible();
+  const systemStatus = page.getByRole("region", { name: "System status" });
+  await expect(systemStatus.getByText("Ledger balanced")).toBeVisible();
+  await expect(systemStatus.getByText("API ready")).toBeVisible();
 
   // --- accounts -------------------------------------------------------------------------
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /Transaction Playground/ }).click();
@@ -83,15 +85,25 @@ test("create, fund, transfer, and verify through the real API", async ({ page })
   const outcome = page.getByTestId("transfer-outcome");
   await expect(outcome).toHaveAttribute("data-category", "succeeded");
   await expect(outcome.getByText("Transfer completed")).toBeVisible();
-  await expect(outcome.getByText(key)).toBeVisible();
-  await expect(outcome.getByText(/^api-\d$/)).toBeVisible(); // X-Served-By from a real replica
   await expect(accountRow(page, alice)).toContainText("$74.50");
   await expect(accountRow(page, bob)).toContainText("$25.50");
+  await expect(outcome.getByTestId("balances-now")).toContainText("$74.50");
+  // Response metadata is one click away.
+  await outcome.getByRole("button", { name: /Request details/ }).click();
+  await expect(outcome.getByText(key)).toBeVisible();
+  await expect(outcome.getByTestId("request-details").getByText(/^api-\d$/)).toBeVisible(); // X-Served-By from a real replica
+  // The request path (collapsed card): through a real replica, all the way to PostgreSQL.
+  await page.getByRole("button", { name: /Request path/ }).click();
+  const flow = page.getByRole("figure", { name: "Request flow" });
+  await expect(flow.locator('[data-node="database"]')).toHaveAttribute("data-state", "success");
+  await expect(flow.locator('[data-node="replica"]')).toContainText(/api-\d/);
+  await expect(page.getByTestId("flow-evidence")).toContainText("Observed: Client, NGINX, API replica, Redis, PostgreSQL, Response");
 
   // Replaying the same key moves no money.
   await page.getByRole("button", { name: /Send again with same key/ }).click();
   await expect(outcome.getByText("Replayed original success")).toBeVisible();
   await expect(outcome.getByText("Idempotent-Replayed", { exact: true })).toBeVisible();
+  await expect(flow.locator('[data-node="database"]')).toHaveAttribute("data-state", "replayed");
   await expect(accountRow(page, alice)).toContainText("$74.50");
   await shot(page, "playground-success");
 
@@ -105,6 +117,9 @@ test("create, fund, transfer, and verify through the real API", async ({ page })
   await form.getByRole("button", { name: "Send transfer" }).click();
   await expect(outcome).toHaveAttribute("data-category", "rejected");
   await expect(outcome.getByText("Insufficient funds (409)")).toBeVisible();
+  await expect(flow.locator('[data-node="database"]')).toHaveAttribute("data-state", "blocked");
+  await flow.locator('[data-node="database"]').click();
+  await expect(page.getByRole("region", { name: "PostgreSQL details" }).locator('[data-stage="postgres"]')).toHaveAttribute("data-state", "blocked");
   await expect(accountRow(page, alice)).toContainText("$74.50");
   await shot(page, "playground-insufficient-funds");
 
@@ -127,14 +142,19 @@ test("create, fund, transfer, and verify through the real API", async ({ page })
   // --- reconciliation ------------------------------------------------------------------------
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /Ledger & Reconciliation/ }).click();
   await expect(page.getByTestId("reconciliation-verdict")).toHaveAttribute("data-ok", "true");
+  await expect(page.getByText("Ledger balanced — all checks passed")).toBeVisible();
+  await page.getByRole("button", { name: /Invariants/ }).click();
+  await expect(page.getByRole("list", { name: "Invariant checks" }).getByText("Holds")).toHaveCount(4);
+  await page.getByRole("button", { name: /How double-entry works/ }).click();
   await expect(page.getByText("Illustrative example")).toBeVisible();
   await shot(page, "ledger-reconciliation");
 
-  for (const route of ["/experiments", "/topology"]) {
+  // Roadmap pages stay clearly labelled (Experiment Lab and Topology are live since Phase 5B;
+  // see experiment-lab.spec.ts).
+  for (const route of ["/anomalies", "/performance"]) {
     await page.goto(route);
     await expect(page.getByText(/not functional yet/)).toBeVisible();
   }
-  await shot(page, "topology");
 
   // Back on the overview, the new transfer is listed and the activity chart has rendered.
   await page.goto("/");
@@ -148,7 +168,7 @@ test("create, fund, transfer, and verify through the real API", async ({ page })
 test("responsive layout at phone width", async ({ page }) => {
   const problems = trackConsole(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  for (const route of ["/", "/playground", "/history", "/ledger"]) {
+  for (const route of ["/", "/playground", "/history", "/ledger", "/experiments", "/topology"]) {
     await page.goto(route);
     await expect(page.getByRole("main")).toBeVisible();
     await page.waitForLoadState("networkidle");

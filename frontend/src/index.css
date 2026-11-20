@@ -110,3 +110,32 @@
     font-variant-numeric: tabular-nums;
   }
 }
+
+/* Request Flow Visualizer: a moving dash along an edge a request travelled. Uses the
+   element's text colour, so the edge's state colour (success, info, ...) carries over. */
+@keyframes flow-dash-x {
+  to {
+    background-position: 14px 0;
+  }
+}
+@keyframes flow-dash-y {
+  to {
+    background-position: 0 14px;
+  }
+}
+@utility flow-live-x {
+  background-image: repeating-linear-gradient(90deg, currentColor 0 7px, transparent 7px 14px);
+  background-size: 14px 100%;
+  animation: flow-dash-x 0.7s linear infinite;
+}
+@utility flow-live-y {
+  background-image: repeating-linear-gradient(180deg, currentColor 0 7px, transparent 7px 14px);
+  background-size: 100% 14px;
+  animation: flow-dash-y 0.7s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-live-x,
+  .flow-live-y {
+    animation: none;
+  }
+}

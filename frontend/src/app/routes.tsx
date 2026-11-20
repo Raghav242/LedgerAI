@@ -4,7 +4,9 @@ import { AppShell } from "@/components/layout/AppShell";
 import { HistoryPage } from "@/features/history/HistoryPage";
 import { LedgerPage } from "@/features/ledger/LedgerPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
-import { AnomalyLabPage, ExperimentLabPage, PerformanceLabPage, TopologyPage } from "@/features/planned/PlannedPages";
+import { ExperimentLabPage } from "@/features/lab/ExperimentLabPage";
+import { AnomalyLabPage, PerformanceLabPage } from "@/features/planned/PlannedPages";
+import { TopologyPage } from "@/features/topology/TopologyPage";
 import { PlaygroundPage } from "@/features/transfers/PlaygroundPage";
 
 export const routes: RouteObject[] = [

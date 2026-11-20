@@ -7,12 +7,14 @@ from fastapi import FastAPI
 
 from app.api.error_handlers import register_exception_handlers
 from app.api.middleware import ResponseHeadersMiddleware
-from app.api.rate_limit import RateLimits, build_policies
+from app.api.rate_limit import RateLimits, build_lab_burst_policies, build_policies
 from app.api.router import build_api_router
 from app.api.routes import health
 from app.core.config import Settings, get_settings
 from app.core.database import create_db_engine, create_session_factory
 from app.core.logging import configure_logging
+from app.lab.runner import LabRunner
+from app.lab.signing import LabTrafficSigner
 from app.rate_limiting import (
     InMemoryFixedWindowLimiter,
     RateLimiter,
@@ -45,6 +47,14 @@ def create_app(
         else:
             rate_limiter = InMemoryFixedWindowLimiter()
     read_policy, write_policy = build_policies(settings)
+    lab_read, lab_write = build_lab_burst_policies()
+    rate_limits = RateLimits(
+        limiter=rate_limiter,
+        read=read_policy,
+        write=write_policy,
+        lab_burst_read=lab_read,
+        lab_burst_write=lab_write,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -57,8 +67,14 @@ def create_app(
             type(rate_limiter).__name__,
         )
         if settings.enable_dev_endpoints:
-            logger.warning("Development-only endpoints are ENABLED (POST /accounts/{id}/fund)")
+            logger.warning(
+                "Development-only endpoints are ENABLED (POST /accounts/{id}/fund, /lab/*); "
+                "lab target %s",
+                settings.lab_target_base_url,
+            )
         yield
+        if lab_runner is not None:
+            lab_runner.shutdown()
         engine.dispose()
         if redis_client is not None:
             redis_client.close()
@@ -68,7 +84,19 @@ def create_app(
     app.state.settings = settings
     app.state.session_factory = create_session_factory(engine)
     app.state.redis = redis_client
-    app.state.rate_limits = RateLimits(limiter=rate_limiter, read=read_policy, write=write_policy)
+    app.state.rate_limits = rate_limits
+    # Experiment Lab (development only, like the funding endpoint it relies on).
+    lab_runner: LabRunner | None = None
+    if settings.enable_dev_endpoints:
+        signer = LabTrafficSigner.from_settings(settings)
+        lab_runner = LabRunner(
+            settings=settings,
+            session_factory=app.state.session_factory,
+            rate_limits=rate_limits,
+            signer=signer,
+        )
+        app.state.lab_signer = signer
+    app.state.lab_runner = lab_runner
 
     app.add_middleware(
         ResponseHeadersMiddleware,

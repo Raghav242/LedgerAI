@@ -2,11 +2,12 @@ import { AlertTriangle, CheckCircle2, CircleHelp, Clock, ExternalLink, Loader2, 
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 import { CopyButton, IdText, KeyValue, Money } from "@/components/common/display";
+import { Disclosure } from "@/components/common/Disclosure";
 import { EmptyState } from "@/components/common/states";
 import { Timeline, type TimelineEvent, type TimelineTone } from "@/components/lab/Timeline";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/misc";
 import { useCountdown } from "@/hooks/useCountdown";
 import { formatTime } from "@/lib/format";
@@ -25,12 +26,14 @@ const CATEGORY: Record<OutcomeCategory, { label: string; tone: TimelineTone; ico
 export interface TransferResultPanelProps {
   state: TransferAttemptState;
   nameOf: (id: string) => string;
+  /** Current balance from the backend's account list (shown only after a confirmed move). */
+  balanceOf?: (id: string) => number | undefined;
   onRetry: () => void;
   onReplay: () => void;
   onStartNew: () => void;
 }
 
-export function TransferResultPanel({ state, nameOf, onRetry, onReplay, onStartNew }: TransferResultPanelProps) {
+export function TransferResultPanel({ state, nameOf, balanceOf, onRetry, onReplay, onStartNew }: TransferResultPanelProps) {
   const outcome = state.lastOutcome;
   const lastAttempt = state.attempts.at(-1);
   const retryDeadline =
@@ -40,8 +43,7 @@ export function TransferResultPanel({ state, nameOf, onRetry, onReplay, onStartN
   return (
     <Card aria-live="polite">
       <CardHeader>
-        <CardTitle>Transfer result</CardTitle>
-        <CardDescription>What the API answered, and what it means for the idempotency key.</CardDescription>
+        <CardTitle>Result</CardTitle>
       </CardHeader>
       <CardContent className="space-y-5">
         {state.inFlight && (
@@ -51,15 +53,11 @@ export function TransferResultPanel({ state, nameOf, onRetry, onReplay, onStartN
         )}
 
         {!outcome && !state.inFlight && (
-          <EmptyState
-            title="No transfer sent yet"
-            description="Results appear here: HTTP status, transaction id, serving replica and what to do next."
-            className="py-6"
-          />
+          <EmptyState title="No transfer sent yet" description="The outcome and what to do next will appear here." className="py-6" />
         )}
 
         {outcome && lastAttempt && (
-          <OutcomeSummary outcome={outcome} attempt={lastAttempt} nameOf={nameOf} waitSeconds={waitSeconds} />
+          <OutcomeSummary outcome={outcome} attempt={lastAttempt} nameOf={nameOf} balanceOf={balanceOf} waitSeconds={waitSeconds} />
         )}
 
         {outcome && !state.inFlight && (
@@ -97,10 +95,14 @@ export function TransferResultPanel({ state, nameOf, onRetry, onReplay, onStartN
         {state.attempts.length > 0 && (
           <>
             <Separator />
-            <div className="space-y-3">
-              <div className="text-xs font-medium text-muted-foreground">Attempts for this logical transfer</div>
+            <Disclosure
+              key={state.key}
+              title="Attempts for this logical transfer"
+              meta={state.attempts.length}
+              defaultOpen={state.attempts.length > 1}
+            >
               <Timeline events={state.attempts.map(toTimelineEvent)} />
-            </div>
+            </Disclosure>
           </>
         )}
       </CardContent>
@@ -112,16 +114,23 @@ function OutcomeSummary({
   outcome,
   attempt,
   nameOf,
+  balanceOf,
   waitSeconds,
 }: {
   outcome: TransferOutcome;
   attempt: AttemptRecord;
   nameOf: (id: string) => string;
+  balanceOf?: (id: string) => number | undefined;
   waitSeconds: number;
 }) {
   const style = CATEGORY[outcome.category];
   const request = attempt.request;
   const transfer = outcome.transfer;
+  // Balances are shown only after a CONFIRMED new movement (not a replay, never an uncertain
+  // outcome); they come from the refreshed account list, i.e. from the backend.
+  const confirmedMove = outcome.category === "succeeded" && !outcome.replayed && !!balanceOf;
+  const sourceBalance = confirmedMove ? balanceOf!(request.source_account_id) : undefined;
+  const destinationBalance = confirmedMove ? balanceOf!(request.destination_account_id) : undefined;
   return (
     <div className="space-y-4" data-testid="transfer-outcome" data-category={outcome.category}>
       <div className="flex items-start gap-3">
@@ -135,6 +144,29 @@ function OutcomeSummary({
           <p className="text-sm text-muted-foreground">{outcome.message}</p>
         </div>
       </div>
+
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+        <KeyValue label="Amount">
+          <Money minor={transfer?.amount_minor ?? request.amount_minor} className="text-base font-semibold" />
+        </KeyValue>
+        <KeyValue label="Route" className="sm:col-span-2">
+          <span className="block truncate" title={`${nameOf(request.source_account_id)} → ${nameOf(request.destination_account_id)}`}>
+            {nameOf(request.source_account_id)} → {nameOf(request.destination_account_id)}
+          </span>
+        </KeyValue>
+        {confirmedMove && sourceBalance !== undefined && destinationBalance !== undefined && (
+          <KeyValue label="Balances now" className="col-span-2 sm:col-span-3">
+            <span className="flex flex-wrap gap-x-4 gap-y-1" data-testid="balances-now">
+              <span>
+                {nameOf(request.source_account_id)} <Money minor={sourceBalance} />
+              </span>
+              <span>
+                {nameOf(request.destination_account_id)} <Money minor={destinationBalance} />
+              </span>
+            </span>
+          </KeyValue>
+        )}
+      </dl>
 
       <div
         className={cn(
@@ -157,53 +189,47 @@ function OutcomeSummary({
         )}
       </div>
 
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
-        <KeyValue label="HTTP status">
-          <code className="font-mono">{outcome.status ?? "no response"}</code>
-        </KeyValue>
-        <KeyValue label="Error / status code">
-          <code className="font-mono text-xs">{outcome.code}</code>
-        </KeyValue>
-        <KeyValue label="Transfer status">{transfer ? <Badge variant="success">{transfer.status}</Badge> : <span className="text-muted-foreground">—</span>}</KeyValue>
-        <KeyValue label="Transaction id">{transfer ? <IdText id={transfer.id} /> : <span className="text-muted-foreground">none</span>}</KeyValue>
-        <KeyValue label="Amount">
-          <Money minor={transfer?.amount_minor ?? request.amount_minor} />
-        </KeyValue>
-        <KeyValue label="Route" className="col-span-2 sm:col-span-1">
-          <span className="block truncate" title={`${nameOf(request.source_account_id)} → ${nameOf(request.destination_account_id)}`}>
-            {nameOf(request.source_account_id)} → {nameOf(request.destination_account_id)}
-          </span>
-        </KeyValue>
-        <KeyValue label="Idempotency key" className="col-span-2">
-          <span className="flex items-center gap-1">
-            <code className="truncate font-mono text-xs">{attempt.key}</code>
-            <CopyButton value={attempt.key} label="Copy idempotency key" />
-          </span>
-        </KeyValue>
-        <KeyValue label="Served by">
-          <code className="font-mono text-xs">{outcome.meta?.servedBy ?? "—"}</code>
-        </KeyValue>
-        <KeyValue label="Request id" className="col-span-2">
-          <code className="truncate font-mono text-xs">{outcome.meta?.requestId ?? "—"}</code>
-        </KeyValue>
-        <KeyValue label="Latency">
-          <code className="font-mono text-xs">{outcome.meta ? `${outcome.meta.durationMs} ms` : "—"}</code>
-        </KeyValue>
-      </dl>
-
-      {outcome.meta?.rateLimit.policy && (
-        <p className="text-xs text-muted-foreground">
-          Rate limit policy <code className="font-mono">{outcome.meta.rateLimit.policy}</code>: {outcome.meta.rateLimit.remaining ?? "?"} of{" "}
-          {outcome.meta.rateLimit.limit ?? "?"} tokens left (shared by every replica via Redis).
-        </p>
-      )}
-
-      {outcome.details !== null && outcome.details !== undefined && (
-        <details className="rounded-lg border bg-muted/30">
-          <summary className="cursor-pointer px-3 py-2 text-xs font-medium">Error details</summary>
-          <pre className="overflow-x-auto px-3 pb-3 font-mono text-xs text-muted-foreground">{JSON.stringify(outcome.details, null, 2)}</pre>
-        </details>
-      )}
+      <Disclosure title="Request details" meta={`HTTP ${outcome.status ?? "—"} · ${outcome.meta?.servedBy ?? "no replica"}`}>
+        <div className="space-y-3" data-testid="request-details">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+            <KeyValue label="HTTP status">
+              <code className="font-mono">{outcome.status ?? "no response"}</code>
+            </KeyValue>
+            <KeyValue label="Error / status code">
+              <code className="font-mono text-xs">{outcome.code}</code>
+            </KeyValue>
+            <KeyValue label="Transfer status">{transfer ? <Badge variant="success">{transfer.status}</Badge> : <span className="text-muted-foreground">—</span>}</KeyValue>
+            <KeyValue label="Transaction id">{transfer ? <IdText id={transfer.id} /> : <span className="text-muted-foreground">none</span>}</KeyValue>
+            <KeyValue label="Served by">
+              <code className="font-mono text-xs">{outcome.meta?.servedBy ?? "—"}</code>
+            </KeyValue>
+            <KeyValue label="Latency">
+              <code className="font-mono text-xs">{outcome.meta ? `${outcome.meta.durationMs} ms` : "—"}</code>
+            </KeyValue>
+            <KeyValue label="Idempotency key" className="col-span-2 sm:col-span-3">
+              <span className="flex items-center gap-1">
+                <code className="truncate font-mono text-xs">{attempt.key}</code>
+                <CopyButton value={attempt.key} label="Copy idempotency key" />
+              </span>
+            </KeyValue>
+            <KeyValue label="Request id" className="col-span-2 sm:col-span-3">
+              <code className="truncate font-mono text-xs">{outcome.meta?.requestId ?? "—"}</code>
+            </KeyValue>
+          </dl>
+          {outcome.meta?.rateLimit.policy && (
+            <p className="text-xs text-muted-foreground">
+              Rate limit policy <code className="font-mono">{outcome.meta.rateLimit.policy}</code>: {outcome.meta.rateLimit.remaining ?? "?"} of{" "}
+              {outcome.meta.rateLimit.limit ?? "?"} tokens left (shared by every replica via Redis).
+            </p>
+          )}
+          {outcome.details !== null && outcome.details !== undefined && (
+            <div className="rounded-lg border bg-muted/30">
+              <div className="px-3 py-2 text-xs font-medium">Error details</div>
+              <pre className="overflow-x-auto px-3 pb-3 font-mono text-xs text-muted-foreground">{JSON.stringify(outcome.details, null, 2)}</pre>
+            </div>
+          )}
+        </div>
+      </Disclosure>
     </div>
   );
 }

@@ -3,13 +3,15 @@ import { lazy, Suspense, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { DataSourceTag, PageHeader } from "@/components/common/display";
 import { StatCard } from "@/components/common/StatCard";
-import { EmptyState, ErrorState, LoadingRows } from "@/components/common/states";
+import { Disclosure } from "@/components/common/Disclosure";
+import { EmptyState, ErrorState, InlineSpinner, LoadingRows } from "@/components/common/states";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { TransferTable } from "@/features/history/TransferTable";
 import { useReadiness, useReconciliation, useSummary, useTransfers } from "@/hooks/queries";
 import { useAccountDirectory } from "@/hooks/useAccountDirectory";
 import { formatCount, formatTime } from "@/lib/format";
+import { describeError } from "@/lib/errors";
 import { formatMinor } from "@/lib/money";
 
 // Recharts is the largest dependency and only this chart needs it: load it on demand.
@@ -35,7 +37,7 @@ export function OverviewPage() {
     <div className="space-y-6">
       <PageHeader
         title="Overview"
-        description="A live snapshot of the virtual transaction system. Every number on this page is read from the running backend; aggregates are computed in PostgreSQL over one consistent snapshot."
+        description="A live snapshot of the system. Every number comes from the running backend."
         actions={<DataSourceTag kind="live" />}
       />
 
@@ -46,7 +48,7 @@ export function OverviewPage() {
           loading={summary.isLoading}
           error={!!summary.error}
           value={summary.data && formatCount(summary.data.merchant_account_count)}
-          hint="Merchant accounts (excludes the system funding account)"
+          hint="Merchant accounts"
         />
         <StatCard
           label="Completed transfers"
@@ -54,7 +56,7 @@ export function OverviewPage() {
           loading={summary.isLoading}
           error={!!summary.error}
           value={transfers && formatCount(transfers.count)}
-          hint="Merchant-to-merchant; rejected attempts are not stored"
+          hint="Merchant to merchant"
         />
         <StatCard
           label="Transfer volume"
@@ -62,7 +64,7 @@ export function OverviewPage() {
           loading={summary.isLoading}
           error={!!summary.error}
           value={transfers && formatMinor(transfers.volume_minor)}
-          hint="Sum of all completed merchant transfers (virtual USD)"
+          hint="Completed transfers, virtual USD"
         />
         <StatCard
           label="Simulated money held"
@@ -70,41 +72,55 @@ export function OverviewPage() {
           loading={summary.isLoading}
           error={!!summary.error}
           value={summary.data && formatMinor(summary.data.merchant_balance_total_minor)}
-          hint={funding ? `Issued via ${formatCount(funding.count)} dev fundings (${formatMinor(funding.volume_minor)})` : "Across all merchant accounts"}
+          hint={funding ? `From ${formatCount(funding.count)} simulated fundings` : "Across merchant accounts"}
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <HealthCard
-          title="Ledger reconciliation"
-          to="/ledger"
-          loading={reconciliation.isLoading}
-          error={reconciliation.error}
-          ok={reconciliation.data?.ok}
-          okText="Passed: every balance matches the ledger"
-          failText="FAILED: the backend reported a violated invariant"
-          detail={
-            reconciliation.data &&
-            `${formatCount(reconciliation.data.accounts_checked)} accounts · ${formatCount(reconciliation.data.ledger_entries_checked)} entries · checked ${formatTime(reconciliation.dataUpdatedAt)}`
-          }
-          okIcon={<ShieldCheck className="size-5 text-success" />}
-          failIcon={<ShieldAlert className="size-5 text-destructive" />}
-        />
-        <HealthCard
-          title="API connectivity"
-          loading={readiness.isLoading}
-          error={readiness.error}
-          ok={readiness.data ? readiness.data.report.status === "ok" : undefined}
-          okText="Ready: PostgreSQL and Redis reachable"
-          failText="Degraded: a dependency is unavailable"
-          detail={
-            readiness.data &&
-            `database ${readiness.data.report.database ?? "n/a"} · redis ${readiness.data.report.redis ?? "n/a"} · answered by ${readiness.data.report.replica ?? "?"} via NGINX`
-          }
-          okIcon={<Wifi className="size-5 text-success" />}
-          failIcon={<WifiOff className="size-5 text-warning" />}
-        />
-      </div>
+      <Card className="gap-2 py-3" role="region" aria-label="System status">
+        <CardContent className="space-y-1 px-4">
+          <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+            <StatusItem
+              loading={reconciliation.isLoading}
+              error={reconciliation.error}
+              ok={reconciliation.data?.ok}
+              okText="Ledger balanced"
+              failText="Reconciliation failed"
+              okIcon={<ShieldCheck />}
+              failIcon={<ShieldAlert />}
+              to="/ledger"
+            />
+            <StatusItem
+              loading={readiness.isLoading}
+              error={readiness.error}
+              ok={readiness.data ? readiness.data.report.status === "ok" : undefined}
+              okText="API ready"
+              failText="API degraded"
+              okIcon={<Wifi />}
+              failIcon={<WifiOff />}
+            />
+          </div>
+          <Disclosure title="Status details">
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-xs text-muted-foreground">Reconciliation</dt>
+                <dd>
+                  {reconciliation.data
+                    ? `${reconciliation.data.ok ? "Passed: every balance matches the ledger" : "FAILED: the backend reported a violated invariant"} · ${formatCount(reconciliation.data.accounts_checked)} accounts · ${formatCount(reconciliation.data.ledger_entries_checked)} entries · checked ${formatTime(reconciliation.dataUpdatedAt)}`
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs text-muted-foreground">Dependencies</dt>
+                <dd>
+                  {readiness.data
+                    ? `${readiness.data.report.status === "ok" ? "Ready: PostgreSQL and Redis reachable" : "Degraded: a dependency is unavailable"} · database ${readiness.data.report.database ?? "n/a"} · redis ${readiness.data.report.redis ?? "n/a"} · answered by ${readiness.data.report.replica ?? "?"} via NGINX`
+                    : "—"}
+                </dd>
+              </div>
+            </dl>
+          </Disclosure>
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 gap-6 xl:grid-cols-5">
         <Card className="xl:col-span-2">
@@ -166,59 +182,47 @@ export function OverviewPage() {
   );
 }
 
-function HealthCard({
-  title,
-  to,
+function StatusItem({
   loading,
   error,
   ok,
   okText,
   failText,
-  detail,
   okIcon,
   failIcon,
+  to,
 }: {
-  title: string;
-  to?: string;
   loading: boolean;
   error: unknown;
   ok: boolean | undefined;
   okText: string;
   failText: string;
-  detail?: string | false | null;
   okIcon: ReactNode;
   failIcon: ReactNode;
+  to?: string;
 }) {
-  return (
-    <Card className="gap-3 py-4">
-      <CardHeader className="px-4">
-        <CardTitle>{title}</CardTitle>
-        {to && (
-          <CardAction>
-            <Button variant="ghost" size="sm" className="h-7" asChild>
-              <Link to={to}>
-                Details <ArrowRight />
-              </Link>
-            </Button>
-          </CardAction>
-        )}
-      </CardHeader>
-      <CardContent className="px-4">
-        {loading ? (
-          <LoadingRows rows={1} />
-        ) : error && ok === undefined ? (
-          <ErrorState error={error} compact className="items-start py-0 text-left" />
-        ) : (
-          <div className="flex items-start gap-3">
-            {ok ? okIcon : failIcon}
-            <div className="min-w-0">
-              <div className="text-sm font-medium">{ok ? okText : failText}</div>
-              {detail && <div className="truncate text-xs text-muted-foreground">{detail}</div>}
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+  if (loading) return <InlineSpinner label="Checking…" />;
+  if (ok === undefined) {
+    return (
+      <span className="flex items-center gap-1.5 text-sm text-destructive [&>svg]:size-4" role="status">
+        <WifiOff aria-hidden /> {describeError(error).title}
+      </span>
+    );
+  }
+  const content = (
+    <>
+      <span className={ok ? "text-success" : "text-destructive"} aria-hidden>
+        {ok ? okIcon : failIcon}
+      </span>
+      <span className={ok ? "" : "text-destructive"}>{ok ? okText : failText}</span>
+    </>
+  );
+  const className = "flex items-center gap-1.5 text-sm font-medium [&_svg]:size-4";
+  return to ? (
+    <Link to={to} className={`${className} rounded-md outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50`}>
+      {content}
+    </Link>
+  ) : (
+    <span className={className}>{content}</span>
   );
 }
-

@@ -11,6 +11,7 @@ from app.models.enums import (
     TransferStatus,
 )
 from app.models.idempotency_record import IdempotencyRecord
+from app.models.lab_run import LabRun, LabRunEvent
 from app.models.ledger_entry import LedgerEntry
 from app.models.outbox import EventAuditEntry, OutboxEvent, ProcessedEvent
 from app.models.transfer import Transfer
@@ -24,6 +25,8 @@ __all__ = [
     "EventAuditEntry",
     "IdempotencyOutcome",
     "IdempotencyRecord",
+    "LabRun",
+    "LabRunEvent",
     "LedgerEntry",
     "LedgerEntryRole",
     "OutboxEvent",

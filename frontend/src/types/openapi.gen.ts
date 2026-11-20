@@ -242,6 +242,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lab/experiments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The allow-listed experiments with their bounded parameters */
+        get: operations["list_experiments_api_v1_lab_experiments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lab/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent experiment runs (newest first) */
+        get: operations["list_runs_api_v1_lab_runs_get"];
+        put?: never;
+        /**
+         * Start an experiment run in the background
+         * @description Validates the experiment id against the allow-list and every parameter against its bounds, then starts the run and returns immediately. Only one run may be active at a time (409 LAB_RUN_IN_PROGRESS).
+         */
+        post: operations["start_run_api_v1_lab_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lab/runs/{run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Status, progress, result and invariant checks of one run */
+        get: operations["get_run_api_v1_lab_runs__run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lab/runs/{run_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Timeline events of one run, incrementally (after a sequence number) */
+        get: operations["get_run_events_api_v1_lab_runs__run_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -309,6 +381,43 @@ export interface components {
             /** Ledger Balance Minor */
             ledger_balance_minor: number;
         };
+        /** ConcurrencyParams */
+        ConcurrencyParams: {
+            /**
+             * Concurrent requests
+             * @description Transfers released at the same instant.
+             * @default 100
+             */
+            requests: number;
+            /**
+             * Amount per transfer
+             * @description Each withdrawal, in cents.
+             * @default 1000
+             */
+            amount_minor: number;
+            /**
+             * Starting balance
+             * @description Simulated money minted into the isolated source account, in cents.
+             * @default 10000
+             */
+            funding_minor: number;
+        };
+        /** ConcurrencyRunCreate */
+        ConcurrencyRunCreate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            experiment: "concurrency";
+            /**
+             * @default {
+             *       "requests": 100,
+             *       "amount_minor": 1000,
+             *       "funding_minor": 10000
+             *     }
+             */
+            params: components["schemas"]["ConcurrencyParams"];
+        };
         /**
          * Currency
          * @enum {string}
@@ -340,10 +449,304 @@ export interface components {
         ErrorResponse: {
             error: components["schemas"]["ErrorBody"];
         };
+        /** ExperimentDefinition */
+        ExperimentDefinition: {
+            /**
+             * Id
+             * @enum {string}
+             */
+            id: "concurrency" | "idempotency" | "rate_limiting" | "load_balancing";
+            /** Title */
+            title: string;
+            /** Summary */
+            summary: string;
+            /** Concept */
+            concept: string;
+            /** Expected */
+            expected: string[];
+            /** How It Works */
+            how_it_works: string[];
+            /**
+             * Risk
+             * @default safe_local
+             * @constant
+             */
+            risk: "safe_local";
+            /** Risk Note */
+            risk_note: string;
+            /** Available */
+            available: boolean;
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
+            /** Estimated Seconds */
+            estimated_seconds: number;
+            /** Params */
+            params: components["schemas"]["ParamSpec"][];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** IdempotencyParams */
+        IdempotencyParams: {
+            /**
+             * Duplicate requests
+             * @description Concurrent copies of ONE transfer, all with the same Idempotency-Key.
+             * @default 20
+             */
+            duplicates: number;
+            /**
+             * Transfer amount
+             * @description The single logical transfer, in cents.
+             * @default 1000
+             */
+            amount_minor: number;
+        };
+        /** IdempotencyRunCreate */
+        IdempotencyRunCreate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            experiment: "idempotency";
+            /**
+             * @default {
+             *       "duplicates": 20,
+             *       "amount_minor": 1000
+             *     }
+             */
+            params: components["schemas"]["IdempotencyParams"];
+        };
+        /** LabCheck */
+        LabCheck: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pass" | "fail" | "skipped";
+            /** Observed */
+            observed: string;
+            /** Description */
+            description?: string | null;
+        };
+        /** LabEvent */
+        LabEvent: {
+            /** Seq */
+            seq: number;
+            /** T Ms */
+            t_ms: number;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "phase" | "request" | "check" | "note";
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "info" | "success" | "warning" | "error";
+            /** Title */
+            title: string;
+            /** Detail */
+            detail?: string | null;
+            /** Phase */
+            phase?: string | null;
+            request?: components["schemas"]["LabRequestObservation"] | null;
+        };
+        /** LabEventPage */
+        LabEventPage: {
+            /** Items */
+            items: components["schemas"]["LabEvent"][];
+            /** Next After */
+            next_after: number;
+            /**
+             * Run Status
+             * @enum {string}
+             */
+            run_status: "queued" | "running" | "passed" | "failed" | "error";
+            /** Event Count */
+            event_count: number;
+            /** Events Dropped */
+            events_dropped: number;
+        };
+        /** LabMetric */
+        LabMetric: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Value */
+            value: number | string;
+            /** Unit */
+            unit?: string | null;
+            /**
+             * Tone
+             * @default neutral
+             * @enum {string}
+             */
+            tone: "neutral" | "success" | "warning" | "destructive" | "info";
+            /** Hint */
+            hint?: string | null;
+        };
+        /** LabProgress */
+        LabProgress: {
+            /**
+             * Phase
+             * @default queued
+             */
+            phase: string;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
+            /**
+             * Completed
+             * @default 0
+             */
+            completed: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
+        };
+        /** LabRequestObservation */
+        LabRequestObservation: {
+            /** Index */
+            index: number;
+            /** Attempt */
+            attempt: number;
+            /** Lane */
+            lane: string;
+            /** Method */
+            method: string;
+            /** Path */
+            path: string;
+            /** Status */
+            status: number | null;
+            /** Code */
+            code: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "committed" | "replayed" | "insufficient_funds" | "rate_limited" | "in_progress" | "conflict" | "key_reused" | "read_ok" | "rejected" | "server_error" | "transport_error";
+            /** Replica */
+            replica: string | null;
+            /** Latency Ms */
+            latency_ms: number;
+            /** Replayed */
+            replayed: boolean;
+            /** Retry After S */
+            retry_after_s: number | null;
+            /** Rate Policy */
+            rate_policy: string | null;
+            /** Rate Remaining */
+            rate_remaining: number | null;
+            /** Request Id */
+            request_id: string | null;
+        };
+        /** LabRunRead */
+        LabRunRead: {
+            /** Id */
+            id: string;
+            /**
+             * Experiment
+             * @enum {string}
+             */
+            experiment: "concurrency" | "idempotency" | "rate_limiting" | "load_balancing";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "passed" | "failed" | "error";
+            /** Params */
+            params: {
+                [key: string]: number;
+            };
+            progress: components["schemas"]["LabProgress"];
+            result: components["schemas"]["LabRunResult"] | null;
+            /** Checks */
+            checks: components["schemas"]["LabCheck"][] | null;
+            /** Error */
+            error: string | null;
+            /** Runner Replica */
+            runner_replica: string;
+            /** Target Base Url */
+            target_base_url: string;
+            /** Event Count */
+            event_count: number;
+            /** Events Dropped */
+            events_dropped: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Started At */
+            started_at: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Heartbeat At
+             * Format: date-time
+             */
+            heartbeat_at: string;
+        };
+        /** LabRunResult */
+        LabRunResult: {
+            /** Summary */
+            summary: string;
+            /** Explanation */
+            explanation: string[];
+            /** Metrics */
+            metrics: components["schemas"]["LabMetric"][];
+            /** Outcome Counts */
+            outcome_counts: {
+                [key: string]: number;
+            };
+            /** Data */
+            data: {
+                [key: string]: unknown;
+            };
+        };
+        /** LabRunSummary */
+        LabRunSummary: {
+            /** Id */
+            id: string;
+            /**
+             * Experiment
+             * @enum {string}
+             */
+            experiment: "concurrency" | "idempotency" | "rate_limiting" | "load_balancing";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "passed" | "failed" | "error";
+            /** Params */
+            params: {
+                [key: string]: number;
+            };
+            /** Summary */
+            summary: string | null;
+            /** Checks Passed */
+            checks_passed: number;
+            /** Checks Total */
+            checks_total: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
         };
         /**
          * LedgerEntryRead
@@ -380,6 +783,36 @@ export interface components {
          * @enum {string}
          */
         LedgerEntryRole: "debit" | "credit";
+        /** LoadBalancingParams */
+        LoadBalancingParams: {
+            /**
+             * Requests
+             * @description Read requests sent through NGINX.
+             * @default 40
+             */
+            requests: number;
+            /**
+             * In flight at once
+             * @description 1 sends them one after another, which shows the round-robin pattern most clearly.
+             * @default 1
+             */
+            concurrency: number;
+        };
+        /** LoadBalancingRunCreate */
+        LoadBalancingRunCreate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            experiment: "load_balancing";
+            /**
+             * @default {
+             *       "requests": 40,
+             *       "concurrency": 1
+             *     }
+             */
+            params: components["schemas"]["LoadBalancingParams"];
+        };
         /** Page[AccountRead] */
         Page_AccountRead_: {
             /** Items */
@@ -406,6 +839,63 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+        };
+        /** ParamSpec */
+        ParamSpec: {
+            /** Name */
+            name: string;
+            /** Label */
+            label: string;
+            /** Description */
+            description: string;
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "requests" | "cents" | "seconds";
+            /** Default */
+            default: number;
+            /** Minimum */
+            minimum: number;
+            /** Maximum */
+            maximum: number;
+        };
+        /** RateLimitingParams */
+        RateLimitingParams: {
+            /**
+             * Burst size
+             * @description Concurrent write requests fired at once against a fresh bucket.
+             * @default 50
+             */
+            burst_requests: number;
+            /**
+             * Refill wait
+             * @description Pause after the burst so the bucket can refill.
+             * @default 2
+             */
+            refill_wait_seconds: number;
+            /**
+             * Requests after the wait
+             * @description Second burst that measures how many tokens came back (0 = skip).
+             * @default 30
+             */
+            probe_requests: number;
+        };
+        /** RateLimitingRunCreate */
+        RateLimitingRunCreate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            experiment: "rate_limiting";
+            /**
+             * @default {
+             *       "burst_requests": 50,
+             *       "refill_wait_seconds": 2,
+             *       "probe_requests": 30
+             *     }
+             */
+            params: components["schemas"]["RateLimitingParams"];
         };
         /** ReconciliationRead */
         ReconciliationRead: {
@@ -1059,6 +1549,183 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountRead"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_experiments_api_v1_lab_experiments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExperimentDefinition"][];
+                };
+            };
+        };
+    };
+    list_runs_api_v1_lab_runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabRunSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_run_api_v1_lab_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConcurrencyRunCreate"] | components["schemas"]["IdempotencyRunCreate"] | components["schemas"]["RateLimitingRunCreate"] | components["schemas"]["LoadBalancingRunCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabRunRead"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Content */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_run_api_v1_lab_runs__run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabRunRead"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_run_events_api_v1_lab_runs__run_id__events_get: {
+        parameters: {
+            query?: {
+                /** @description Return events with seq > after */
+                after?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LabEventPage"];
                 };
             };
             /** @description Not Found */

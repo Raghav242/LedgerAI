@@ -17,14 +17,22 @@ const passing = {
 describe("ReconciliationPanel", () => {
   it("shows loading, then a pass only when the backend says ok", async () => {
     mockApi({ "GET /api/v1/reconciliation": () => json(passing) });
-    renderWithProviders(<ReconciliationPanel />);
+    const { user } = renderWithProviders(<ReconciliationPanel />);
     expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
     const verdict = await screen.findByTestId("reconciliation-verdict");
     expect(verdict).toHaveAttribute("data-ok", "true");
-    expect(within(verdict).getByText("Reconciliation passed")).toBeInTheDocument();
-    expect(within(verdict).getByText(/68 accounts and 398 ledger entries/)).toBeInTheDocument();
+    expect(within(verdict).getByText("Ledger balanced — all checks passed")).toBeInTheDocument();
+    expect(within(verdict).getByText(/68 accounts · 398 ledger entries/)).toBeInTheDocument();
+    // Passing invariants are one click away, not on screen by default.
+    expect(screen.queryByRole("list", { name: "Invariant checks" })).toBeNull();
+    const toggle = screen.getByRole("button", { name: /Invariants/ });
+    expect(toggle).toHaveTextContent("4 of 4 hold");
+    await user.click(toggle);
     const checks = screen.getByRole("list", { name: "Invariant checks" });
     expect(within(checks).getAllByText("Holds")).toHaveLength(4);
+    // Each check expands to its observed value.
+    await user.click(within(checks).getByRole("button", { name: /All ledger entries sum to zero/ }));
+    expect(within(checks).getByText(/over 398 entries/)).toBeInTheDocument();
   });
 
   it("shows failures and the reported discrepancies", async () => {
@@ -41,7 +49,8 @@ describe("ReconciliationPanel", () => {
     renderWithProviders(<ReconciliationPanel />);
     const verdict = await screen.findByTestId("reconciliation-verdict");
     expect(verdict).toHaveAttribute("data-ok", "false");
-    expect(within(verdict).getByText("Reconciliation FAILED")).toBeInTheDocument();
+    expect(within(verdict).getByText("Reconciliation failed — discrepancies detected")).toBeInTheDocument();
+    // On failure the invariants and discrepancies open by themselves.
     expect(within(screen.getByRole("list", { name: "Invariant checks" })).getAllByText("Violated")).toHaveLength(3);
     expect(screen.getByText("Balance mismatches")).toBeInTheDocument();
     expect(screen.getByText("+$5.00")).toBeInTheDocument(); // difference 1500 - 1000
@@ -52,7 +61,7 @@ describe("ReconciliationPanel", () => {
     mockApi({ "GET /api/v1/reconciliation": () => apiError(500, "INTERNAL_ERROR", "An unexpected error occurred") });
     renderWithProviders(<ReconciliationPanel />);
     expect(await screen.findByText("Request failed (500)")).toBeInTheDocument();
-    expect(screen.queryByText(/Reconciliation passed/)).toBeNull();
+    expect(screen.queryByText(/Ledger balanced/)).toBeNull();
     expect(screen.getByRole("button", { name: /Try again/ })).toBeInTheDocument();
   });
 

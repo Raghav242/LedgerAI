@@ -17,7 +17,9 @@ service.
 A React frontend, the **Distributed Systems Lab**, makes all of this observable: create
 accounts, add simulated funds, send idempotent transfers and watch which replica answered,
 what the rate limiter said, and how the double-entry ledger and reconciliation stay
-consistent. All money is simulated virtual USD.
+consistent. Its **Experiment Lab** runs bounded concurrency, idempotency, rate-limiting and
+load-balancing experiments against the real stack and shows the path every request took.
+All money is simulated virtual USD.
 
 ![LedgerFlow AI overview](docs/screenshots/overview.png)
 
@@ -37,6 +39,7 @@ consistent. All money is simulated virtual USD.
 - **Distributed rate limiting:** an atomic Redis token bucket (Lua script, Redis server time, exact integer arithmetic) enforces one quota across all replicas. Writes fail closed (`503`) if Redis is unavailable, reads fail open, and a rate-limited request never opens a database session.
 - **Reliable events:** every committed transfer and funding writes a versioned event (`transfer.completed`, `account.funded`) into a transactional outbox in the same PostgreSQL transaction. A publisher delivers it to RabbitMQ with publisher confirms, and an idempotent consumer applies it exactly once despite at-least-once delivery, with bounded retries and a dead-letter queue. The API never depends on the broker.
 - **Distributed Systems Lab frontend:** React + TypeScript dashboard with a transaction playground (idempotency-key lifecycle, retry-with-same-key, replay, 429/503 handling), transaction history with ledger drill-down, and live reconciliation. See [Frontend](#frontend-distributed-systems-lab).
+- **Experiment Lab:** four allow-listed, bounded experiments (concurrent withdrawals, idempotent retries, distributed rate limiting, load balancing) run in the background from the browser, with live progress, metrics, invariant checks, a timeline and a **Request Flow Visualizer** showing which components each request passed through. See [Experiment Lab](#experiment-lab).
 - **Health checks:** `/health/live` (process only) and `/health/ready` (PostgreSQL + Redis).
 - **Consistent errors:** every error shares one JSON shape with a stable machine-readable code.
 - **Interactive API docs:** OpenAPI/Swagger UI at `/docs`.
@@ -150,7 +153,9 @@ simulated funds requires `ENABLE_DEV_ENDPOINTS=true` (the default in `.env.examp
 | Transaction Playground | live | create and fund accounts; transfers with a visible Idempotency-Key, outcome classification, same-key retry and replay, serving replica, rate-limit headers, attempt timeline |
 | Transaction History | live | filter by account/type, server-side pagination, detail drawer with the transfer's ledger entries |
 | Ledger & Reconciliation | live | double-entry explainer (labelled example), live reconciliation invariants, paged ledger postings |
-| Experiment Lab, System Topology, AI Anomaly Lab, Performance Lab | planned | roadmap pages, clearly marked; no fake controls |
+| Experiment Lab | live | run the four Phase 5B experiments; progress, metrics, invariants, request flow, timeline ([below](#experiment-lab)) |
+| System Topology | live (static) | architecture, component descriptions, highlighted request flows; no live health yet |
+| AI Anomaly Lab, Performance Lab | planned | roadmap pages, clearly marked; no fake controls |
 
 ```powershell
 npm run typecheck      # tsc, strict
@@ -162,8 +167,40 @@ npm run test:e2e       # Playwright against the REAL stack (uses installed Edge;
 npm run gen:api        # regenerate src/types/openapi.gen.ts from the running backend's OpenAPI
 ```
 
-The end-to-end test creates uniquely named `E2E …` accounts with simulated money in the
-development database. Design notes: [docs/phase-5a-design.md](docs/phase-5a-design.md).
+The end-to-end tests create uniquely named `E2E …` and `lab-…` accounts with simulated money
+in the development database. Design notes: [docs/phase-5a-design.md](docs/phase-5a-design.md),
+[docs/phase-5b-design.md](docs/phase-5b-design.md).
+
+### Experiment Lab
+
+Open <http://127.0.0.1:5173/experiments>, pick an experiment, adjust the bounded parameters
+(or keep the defaults) and press **Run experiment**. The run executes in the background on
+the backend; the page shows progress, then leads with the result (status, one sentence, key
+numbers). Request flow, checks, timeline and technical details are tabs below it, and
+"Understand this result" explains why. Click any component in the flow, or any request in
+the timeline, for details. UX notes: [docs/phase-5b-ux-redesign.md](docs/phase-5b-ux-redesign.md).
+
+| Experiment | Demonstrates | Expected with the defaults |
+|---|---|---|
+| Concurrent withdrawals | row locks and atomic transactions | 100 concurrent $10 transfers from $100: exactly 10 succeed, 90 get 409 INSUFFICIENT_FUNDS, balance never negative, ledger reconciles |
+| Idempotent retries | idempotency keys | 20 concurrent copies with one key: one execution, 19 replays, one transfer; key reuse with another amount → 422 |
+| Distributed rate limiting | a global Redis token bucket | burst of 50 against the real write quota (20 + 10/s): ~20 admitted, the rest 429 with Retry-After, spread over both replicas; refill after the wait |
+| Load balancing | NGINX round robin | 40 reads split evenly across `api-1`/`api-2`, shown request by request |
+
+![Rate-limiting experiment](docs/screenshots/lab-rate-limiting.png)
+
+Safety model: the lab exists only with `ENABLE_DEV_ENDPOINTS=true` (refused in production),
+runs only these four experiments with validated, bounded integer parameters, one run at a
+time (enforced by PostgreSQL), each with its own `lab-<run>-…` accounts and its own
+rate-limit bucket. It never stops containers, injects failures, runs commands or touches
+files. Outage demos remain CLI-only (see [Testing and demos](#testing-and-demos)).
+
+The same **Request Flow Visualizer** shows the path of the latest transfer in the
+Transaction Playground and the common flows on the System Topology page. Paths are derived
+from response metadata (status, error code, `X-Served-By`, `Idempotent-Replayed`,
+`X-RateLimit-*`), not from distributed tracing; each component is labelled Observed or Inferred.
+
+![Playground request path](docs/screenshots/playground-success.png)
 
 > **Do not expose the frontend or the API publicly.** There is no authentication: every
 > caller acts as the demo merchant, and the funding endpoint mints simulated money. Both
@@ -188,6 +225,11 @@ development database. Design notes: [docs/phase-5a-design.md](docs/phase-5a-desi
 | `GET` | `/api/v1/ledger/entries` | Ledger postings, newest first (`account_id`, `limit`, `offset`) |
 | `GET` | `/api/v1/stats/summary` | Totals by transfer kind and daily activity (`activity_days`, one snapshot) |
 | `GET` | `/api/v1/reconciliation` | Check balances against the ledger |
+| `GET` | `/api/v1/lab/experiments` | Experiment Lab catalog with parameter bounds (**development only**) |
+| `GET` | `/api/v1/lab/runs` | Recent experiment runs (**development only**) |
+| `POST` | `/api/v1/lab/runs` | Start an allow-listed experiment in the background (**development only**) |
+| `GET` | `/api/v1/lab/runs/{id}` | Run status, progress, metrics and invariant checks (**development only**) |
+| `GET` | `/api/v1/lab/runs/{id}/events` | Run timeline, incrementally (`after`, `limit`) (**development only**) |
 
 Amounts are integers in minor units, so `2550` means $25.50.
 
@@ -291,7 +333,9 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 | `POSTGRES_HOST` / `POSTGRES_PORT` | `127.0.0.1` / `5432` | Database location |
 | `POSTGRES_DB` | `ledgerflow` | Development database |
 | `POSTGRES_TEST_DB` | `ledgerflow_test` | Integration test database |
-| `ENABLE_DEV_ENDPOINTS` | `false` | Enables the funding endpoint |
+| `ENABLE_DEV_ENDPOINTS` | `false` | Enables the funding endpoint and the Experiment Lab |
+| `LAB_TARGET_BASE_URL` | `http://127.0.0.1:8000` (stack: `http://nginx:8080`) | Where the lab runner sends measured traffic |
+| `LAB_TRAFFIC_SECRET` | derived from `POSTGRES_PASSWORD` | HMAC key that marks lab traffic (own rate-limit and idempotency scope) |
 | `APP_ENV` | `development` | `development`, `test` or `production` |
 | `LOG_LEVEL` | `INFO` | Application log level |
 | `TRANSFER_LOCK_TIMEOUT_MS` | `3000` | Max wait for a row lock or an in-flight same-key request |
@@ -326,6 +370,7 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 - **Events start with migration `0003`.** Transfers committed before it have no events. Published outbox rows and receipts are kept indefinitely (no retention job yet).
 - **Fixed container IPs are a local workaround.** They avoid two Docker Desktop DNS problems measured during development (slow lookups for stopped containers, stale upstream addresses after restarts). Production systems use dynamic addresses with service discovery and readiness-based load-balancer membership instead; see [the design notes](docs/phase-3-design.md#fixed-ips-are-a-local-workaround-not-a-production-pattern).
 - **Phase 1 data:** migration `0002` backfills existing transfers exactly. Balances from unrecorded Phase 1 funding become one labelled `legacy_opening_balance` entry per account, and the migration aborts if a balance cannot be explained.
+- **Experiment Lab is development-only and single-run.** Runs execute inside the API replica that accepted them (sharing its CPU and pool), one at a time across the stack; the flow diagrams are derived from responses, not traced; `lab-…` accounts are never deleted. See [the design notes](docs/phase-5b-design.md#9-known-limitations).
 - **Frontend lists are bounded.** The account picker shows the newest 100 accounts (no search endpoint), and list endpoints return no total counts, so history uses previous/next pagination.
 - USD only.
 - On Windows, use `POSTGRES_HOST=127.0.0.1` rather than `localhost`. `localhost` may try IPv6 first and hang against Docker Desktop's port binding.

@@ -81,10 +81,18 @@ describe("transfer results", () => {
     const result = await outcome();
     expect(result).toHaveAttribute("data-category", "succeeded");
     expect(within(result).getByText("Transfer completed")).toBeInTheDocument();
-    expect(within(result).getByText("201")).toBeInTheDocument();
-    expect(within(result).getByText("api-2")).toBeInTheDocument();
-    expect(within(result).getByText("33333333…3333")).toBeInTheDocument(); // transaction id
     expect(within(result).getByText("$25.50")).toBeInTheDocument();
+    // Response metadata is secondary: behind "Request details", summarised in its label.
+    const detailsToggle = within(result).getByRole("button", { name: /Request details/ });
+    expect(detailsToggle).toHaveTextContent("HTTP 201 · api-2");
+    expect(within(result).queryByText("req-9")).toBeNull();
+    await user.click(detailsToggle);
+    const details = within(result).getByTestId("request-details");
+    expect(within(details).getByText("201")).toBeInTheDocument();
+    expect(within(details).getByText("api-2")).toBeInTheDocument();
+    expect(within(details).getByText("req-9")).toBeInTheDocument();
+    expect(within(details).getByText("33333333…3333")).toBeInTheDocument(); // transaction id
+    expect(within(details).getByText(key)).toBeInTheDocument();
 
     const [post] = api.calls("POST", "/api/v1/transfers");
     expect(post?.body).toEqual({ source_account_id: ALICE.id, destination_account_id: BOB.id, amount_minor: 2550, currency: "USD" });
@@ -180,5 +188,103 @@ describe("transfer results", () => {
     expect(await screen.findByText("Replayed original success")).toBeInTheDocument();
     const [a, b] = api.calls("POST", "/api/v1/transfers");
     expect(b?.headers["idempotency-key"]).toBe(a?.headers["idempotency-key"]);
+  });
+});
+
+describe("request path (flow visualizer)", () => {
+  function flow() {
+    return screen.getByRole("figure", { name: "Request flow" });
+  }
+
+  async function openPath(user: ReturnType<typeof setup>["user"]) {
+    await user.click(await screen.findByRole("button", { name: /Request path/ }));
+  }
+
+  it("is not shown before anything is sent", async () => {
+    setup(() => json(transferBody(), { status: 201 }));
+    await screen.findByRole("form", { name: "Transfer funds" });
+    expect(screen.queryByRole("button", { name: /Request path/ })).toBeNull();
+    expect(screen.queryByRole("figure", { name: "Request flow" })).toBeNull();
+  });
+
+  it("is collapsed after an attempt, summarised in one line, and shows the serving replica and token count", async () => {
+    const { user } = setup(() =>
+      json(transferBody(), {
+        status: 201,
+        headers: { "x-served-by": "api-2", "x-ratelimit-policy": "write", "x-ratelimit-limit": "20", "x-ratelimit-remaining": "17" },
+      }),
+    );
+    await fillTransfer(user, "25.50");
+    await send(user);
+    await outcome();
+    const toggle = await screen.findByRole("button", { name: /Request path/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveTextContent("Committed (201) · api-2");
+    await openPath(user);
+    await waitFor(() => expect(flow().querySelector('[data-node="database"]')).toHaveAttribute("data-state", "success"));
+    expect(flow().querySelector('[data-node="replica"]')).toHaveTextContent("api-2");
+    await user.click(within(flow()).getByRole("button", { name: /^Redis:/ }));
+    const details = screen.getByRole("region", { name: "Redis details" });
+    expect(within(details).getByText("17/20 tokens left")).toBeInTheDocument();
+    expect(within(details).getByText("Observed")).toBeInTheDocument(); // X-RateLimit-* headers were present
+  });
+
+  it("shows a replay stopping at the idempotency claim", async () => {
+    const { user } = setup(() => json(transferBody(), { status: 201, headers: { "idempotent-replayed": "true", "x-served-by": "api-1" } }));
+    await fillTransfer(user, "25.50");
+    await send(user);
+    await outcome();
+    await openPath(user);
+    await waitFor(() => expect(flow().querySelector('[data-node="database"]')).toHaveAttribute("data-state", "replayed"));
+    await user.click(within(flow()).getByRole("button", { name: /^PostgreSQL:/ }));
+    const stages = screen.getByRole("list", { name: "PostgreSQL stages" });
+    expect(stages.querySelector('[data-stage="idempotency"]')).toHaveAttribute("data-state", "replayed");
+    expect(stages.querySelector('[data-stage="postgres"]')).toHaveAttribute("data-state", "skipped");
+  });
+
+  it("shows a 429 blocked at Redis", async () => {
+    const { user } = setup(() => apiError(429, "RATE_LIMITED", "Rate limit exceeded; retry later", { policy: "write" }, { "retry-after": "1", "x-served-by": "api-1" }));
+    await fillTransfer(user, "25.50");
+    await send(user);
+    await outcome();
+    await openPath(user);
+    await waitFor(() => expect(flow().querySelector('[data-node="redis"]')).toHaveAttribute("data-state", "blocked"));
+    expect(flow().querySelector('[data-node="database"]')).toHaveAttribute("data-state", "skipped");
+    expect(flow().querySelector('[data-node="response"]')).toHaveTextContent("429");
+  });
+});
+
+describe("result summary", () => {
+  it("shows confirmed balances from the refreshed account list after a new transfer", async () => {
+    const after = [
+      { ...ALICE, balance_minor: 7_450 },
+      { ...BOB, balance_minor: 3_050 },
+    ];
+    mockApi({
+      "GET /health/ready": readyOk,
+      "GET /api/v1/accounts": [() => accountsPage(), () => accountsPage(after)],
+      "POST /api/v1/transfers": () => json(transferBody(), { status: 201 }),
+    });
+    const { user } = renderApp("/playground");
+    await fillTransfer(user, "25.50");
+    await send(user);
+    const balances = await screen.findByTestId("balances-now");
+    await waitFor(() => expect(balances).toHaveTextContent("Alice Coffee $74.50"));
+    expect(balances).toHaveTextContent("Bob Bakery $30.50");
+  });
+
+  it("never shows balances for an uncertain outcome, and keeps the attempt log reachable", async () => {
+    const { user } = setup(() => {
+      throw new TypeError("Failed to fetch");
+    });
+    await fillTransfer(user, "25.50");
+    await send(user);
+    const result = await outcome();
+    expect(result).toHaveAttribute("data-category", "ambiguous");
+    expect(screen.queryByTestId("balances-now")).toBeNull();
+    const attempts = screen.getByRole("button", { name: /Attempts for this logical transfer/ });
+    expect(attempts).toHaveAttribute("aria-expanded", "false");
+    await user.click(attempts);
+    expect(screen.getByText(/#1 Submit · no response NETWORK_ERROR/)).toBeInTheDocument();
   });
 });

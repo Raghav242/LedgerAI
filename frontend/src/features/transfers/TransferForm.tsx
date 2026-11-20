@@ -183,10 +183,10 @@ function IdempotencyKeyInspector({ state, onSetKey }: { state: TransferAttemptSt
   }
 
   return (
-    <div className="rounded-lg border bg-muted/30 p-3" aria-label="Idempotency key">
+    <div className="rounded-lg border border-dashed px-3 py-2" aria-label="Idempotency key">
       <div className="flex flex-wrap items-center gap-2">
-        <KeyRound className="size-4 text-muted-foreground" aria-hidden />
-        <span className="text-sm font-medium">Idempotency-Key</span>
+        <KeyRound className="size-3.5 text-muted-foreground" aria-hidden />
+        <span className="text-xs font-medium text-muted-foreground">Idempotency-Key</span>
         <Badge variant={status.variant}>{status.label}</Badge>
         <div className="ml-auto flex items-center gap-1">
           {canEdit && !editing && (
@@ -233,14 +233,19 @@ function IdempotencyKeyInspector({ state, onSetKey }: { state: TransferAttemptSt
           </p>
         </div>
       ) : (
-        <div className="mt-1.5 flex items-center gap-1">
-          <code className="truncate font-mono text-xs" data-testid="idempotency-key">
+        <div className="mt-1 flex items-center gap-1" title={status.hint}>
+          <code className="truncate font-mono text-xs text-muted-foreground" data-testid="idempotency-key">
             {state.key}
           </code>
           <CopyButton value={state.key} label="Copy idempotency key" />
         </div>
       )}
-      <p className="mt-1 text-xs text-muted-foreground">{status.hint}</p>
+      {/* Only the pinned state needs explaining up front; the others are in the title. */}
+      {state.keyStatus === "pinned" ? (
+        <p className="mt-1 text-xs text-warning">{status.hint}</p>
+      ) : (
+        <span className="sr-only">{status.hint}</span>
+      )}
     </div>
   );
 }

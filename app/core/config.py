@@ -103,6 +103,19 @@ class Settings(BaseSettings):
     consumer_crash_before_commit_event: str | None = None
     consumer_crash_after_commit_event: str | None = None
 
+    # --- Experiment Lab (Phase 5B) -----------------------------------------------------
+    # The lab is part of the development-only surface: its routes exist only when
+    # ENABLE_DEV_ENDPOINTS=true (it mints simulated money for its own isolated accounts).
+    # Where the runner sends the *measured* experiment traffic. In the Compose stack this is
+    # NGINX on the internal network, so lab requests are load balanced like any client's.
+    # Operator configuration only: never derived from a request.
+    lab_target_base_url: str = Field(
+        default="http://127.0.0.1:8000", pattern=r"^https?://[A-Za-z0-9.\-]+(:\d+)?$"
+    )
+    # Signs lab traffic so replicas give it its own rate-limit and idempotency scope. When
+    # unset, a key is derived from POSTGRES_PASSWORD, which every replica already shares.
+    lab_traffic_secret: SecretStr | None = None
+
     @model_validator(mode="after")
     def _forbid_unsafe_production_settings(self) -> "Settings":
         if self.app_env == "production" and self.enable_dev_endpoints:

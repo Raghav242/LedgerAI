@@ -65,7 +65,7 @@ export function HistoryPage() {
     <div className="space-y-6">
       <PageHeader
         title="Transaction History"
-        description="Every committed money movement: merchant transfers, simulated fundings and legacy opening balances. Records are immutable; rejected attempts are never stored as transfers."
+        description="Every committed money movement. Records are immutable; rejected attempts are not stored."
         actions={
           <>
             <DataSourceTag kind="live" />

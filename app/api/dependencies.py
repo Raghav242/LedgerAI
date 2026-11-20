@@ -27,8 +27,18 @@ def get_app_settings(request: Request) -> Settings:
     return request.app.state.settings
 
 
-def get_current_principal() -> Principal:
-    """No authentication yet: every caller is the fixed demo merchant (see core/principal.py)."""
+def get_current_principal(request: Request) -> Principal:
+    """No authentication yet: every caller is the fixed demo merchant (see core/principal.py).
+
+    Exception: requests sent by the Experiment Lab runner carry a server-signed token and
+    get their own per-run scope. Without the lab enabled, or with a missing/invalid token,
+    this is always the demo merchant.
+    """
+    signer = getattr(request.app.state, "lab_signer", None)
+    if signer is not None:
+        principal = signer.principal_for(request.headers.get(signer.header))
+        if principal is not None:
+            return principal
     return DEMO_PRINCIPAL
 
 

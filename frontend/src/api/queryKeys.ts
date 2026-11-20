@@ -24,4 +24,11 @@ export const queryKeys = {
   summary: (days: number) => ["summary", days] as const,
   summaryAll: ["summary"] as const,
   health: ["health", "ready"] as const,
+  lab: {
+    all: ["lab"] as const,
+    experiments: ["lab", "experiments"] as const,
+    runs: ["lab", "runs"] as const,
+    run: (id: string) => ["lab", "run", id] as const,
+    events: (id: string) => ["lab", "events", id] as const,
+  },
 };
