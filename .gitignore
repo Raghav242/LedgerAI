@@ -40,3 +40,6 @@ Thumbs.db
 
 # Raw Locust CSVs (the summarised tables live in docs)
 benchmarks/results/*/
+
+# Local experiment controller state (token, journal)
+.ledgerflow/

@@ -1,9 +1,10 @@
-import { Info, Loader2, Play, RotateCcw } from "lucide-react";
+import { Info, Loader2, Play, RotateCcw, ShieldAlert } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Disclosure } from "@/components/common/Disclosure";
 import { FormField } from "@/components/common/FormField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { describedBy } from "@/lib/a11y";
 import { cn } from "@/lib/utils";
@@ -17,18 +18,32 @@ export interface ExperimentDetailProps {
   starting: boolean;
   /** Another run is active: running is disabled and the reason shown. */
   blockedReason?: string | null;
+  /** Controller-only experiments: whether the local controller can run it right now. */
+  availability?: { runnable: boolean; reason: string | null };
 }
+
+/** What an infrastructure experiment will do, shown in the confirmation dialog. */
+const DISTURBS: Record<string, string> = {
+  redis_outage: "stop the local Redis container, then start it again",
+  rabbitmq_outage: "stop the local RabbitMQ container, then start it again",
+  worker_crash: "stop the event consumer and restart it twice with a crash hook, then restore it",
+  replica_failure: "stop the api-2 container, then start it again",
+};
 
 /**
  * Configure and run one experiment: title, one-sentence purpose, the essential parameters
  * and the primary action. Expected behaviour, steps and parameter explanations live in a
  * collapsed "How this works".
  */
-export function ExperimentDetail({ experiment, onRun, starting, blockedReason }: ExperimentDetailProps) {
+export function ExperimentDetail({ experiment, onRun, starting, blockedReason, availability }: ExperimentDetailProps) {
   // Keyed by experiment id in the parent, so switching experiments resets the form.
   const [raw, setRaw] = useState<RawParams>(() => defaultRawParams(experiment.params));
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [pending, setPending] = useState<Record<string, number> | null>(null);
   const copy = EXPERIMENT_COPY[experiment.id];
+  const infrastructure = experiment.risk === "infrastructure";
+  const runnable = infrastructure ? !!availability?.runnable : experiment.available;
+  const unavailable = infrastructure ? availability?.reason : experiment.available ? null : experiment.unavailable_reason;
 
   function onSubmit(event: FormEvent) {
     event.preventDefault();
@@ -38,7 +53,9 @@ export function ExperimentDetail({ experiment, onRun, starting, blockedReason }:
       return;
     }
     setErrors({});
-    onRun(result.params);
+    // Infrastructure experiments never start without an explicit confirmation.
+    if (infrastructure) setPending(result.params);
+    else onRun(result.params);
   }
 
   return (
@@ -78,7 +95,7 @@ export function ExperimentDetail({ experiment, onRun, starting, blockedReason }:
             })}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button type="submit" disabled={starting || !!blockedReason || !experiment.available}>
+            <Button type="submit" disabled={starting || !!blockedReason || !runnable}>
               {starting ? <Loader2 className="animate-spin" /> : <Play />}
               {starting ? "Starting…" : "Run experiment"}
             </Button>
@@ -94,12 +111,44 @@ export function ExperimentDetail({ experiment, onRun, starting, blockedReason }:
               <RotateCcw /> Defaults
             </Button>
           </div>
+          {unavailable && (
+            <p className="flex items-start gap-1.5 text-xs text-muted-foreground" role="status" data-testid="unavailable-reason">
+              <Info className="mt-0.5 size-3.5 shrink-0" /> <span className="break-words">{unavailable}</span>
+            </p>
+          )}
           {blockedReason && (
             <p className="flex items-start gap-1.5 text-xs text-muted-foreground" role="status">
               <Info className="mt-0.5 size-3.5 shrink-0" /> {blockedReason}
             </p>
           )}
         </form>
+
+        <Dialog open={pending !== null} onOpenChange={(open) => !open && setPending(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                <ShieldAlert className="size-4 text-warning" /> Disturb the local stack?
+              </DialogTitle>
+              <DialogDescription>
+                This run will {DISTURBS[experiment.id] ?? "disturb one local service"}. It only touches this machine's Docker Compose stack, takes about{" "}
+                {experiment.estimated_seconds} s, restores the service automatically and verifies recovery. Other experiments cannot run meanwhile.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setPending(null)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  if (pending) onRun(pending);
+                  setPending(null);
+                }}
+              >
+                <Play /> Run on my local stack
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <Disclosure title="How this works">
           <div className="space-y-4 text-sm">

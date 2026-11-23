@@ -1,0 +1,9 @@
+# Extra pinned dependencies of the AI worker image only (Dockerfile target "ai").
+# scikit-learn MUST match the version the model artifact was trained with (app/ai/model/metadata.json).
+cloudpickle==3.1.3
+joblib==1.6.0
+narwhals==2.29.0
+numpy==2.5.5
+scikit-learn==1.9.1
+scipy==1.18.1
+threadpoolctl==3.8.0

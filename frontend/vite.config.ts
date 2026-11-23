@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -12,9 +13,28 @@ export default defineConfig(({ mode }) => {
   // 127.0.0.1 rather than localhost: on Windows "localhost" may resolve to ::1 first,
   // which Docker Desktop's IPv4-only port binding does not answer.
   const target = env.LEDGERFLOW_API_PROXY_TARGET || "http://127.0.0.1:8080";
+  // The local experiment controller (python -m labctl, 127.0.0.1:8090). Its per-start token
+  // is read from ../.ledgerflow/controller-token on every request and added HERE, in the dev
+  // server, so the browser never sees it and no other web page can use the controller.
+  const controllerTarget = env.LEDGERFLOW_CONTROLLER_PROXY_TARGET || "http://127.0.0.1:8090";
+  const tokenFile = path.resolve(import.meta.dirname, "../.ledgerflow/controller-token");
   const proxy: Record<string, ProxyOptions> = {
     "/api": { target, changeOrigin: false },
     "/health": { target, changeOrigin: false },
+    "/controller": {
+      target: controllerTarget,
+      changeOrigin: false,
+      configure: (server) => {
+        server.on("proxyReq", (proxyReq) => {
+          proxyReq.removeHeader("x-ledgerflow-controller-token");
+          try {
+            proxyReq.setHeader("x-ledgerflow-controller-token", readFileSync(tokenFile, "utf8").trim());
+          } catch {
+            // No controller has run yet: it will answer 401, or not at all.
+          }
+        });
+      },
+    },
   };
 
   return {
@@ -34,6 +54,7 @@ export default defineConfig(({ mode }) => {
       include: ["src/**/*.test.{ts,tsx}"],
       css: false,
       restoreMocks: true,
+      testTimeout: 15_000,
     },
   };
 });

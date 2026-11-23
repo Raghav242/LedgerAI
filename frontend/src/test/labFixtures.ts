@@ -23,6 +23,7 @@ export const CATALOG: ExperimentDefinition[] = [
       "Checks balances, the ledger and global reconciliation."
     ],
     "risk": "safe_local",
+    "runner": "api",
     "risk_note": "Local development only. Creates its own uniquely named lab accounts funded with simulated money and never touches other accounts. Bounded request counts, one run at a time, no infrastructure control.",
     "available": true,
     "unavailable_reason": null,
@@ -75,6 +76,7 @@ export const CATALOG: ExperimentDefinition[] = [
       "Counts committed transfers in the database and reconciles the ledger."
     ],
     "risk": "safe_local",
+    "runner": "api",
     "risk_note": "Local development only. Creates its own uniquely named lab accounts funded with simulated money and never touches other accounts. Bounded request counts, one run at a time, no infrastructure control.",
     "available": true,
     "unavailable_reason": null,
@@ -117,6 +119,7 @@ export const CATALOG: ExperimentDefinition[] = [
       "Compares with what independent per-replica counters would have admitted."
     ],
     "risk": "safe_local",
+    "runner": "api",
     "risk_note": "Local development only. Creates its own uniquely named lab accounts funded with simulated money and never touches other accounts. Bounded request counts, one run at a time, no infrastructure control.",
     "available": true,
     "unavailable_reason": null,
@@ -167,6 +170,7 @@ export const CATALOG: ExperimentDefinition[] = [
       "Summarises the distribution and its spread. No replica is stopped."
     ],
     "risk": "safe_local",
+    "runner": "api",
     "risk_note": "Local development only. Creates its own uniquely named lab accounts funded with simulated money and never touches other accounts. Bounded request counts, one run at a time, no infrastructure control.",
     "available": true,
     "unavailable_reason": null,

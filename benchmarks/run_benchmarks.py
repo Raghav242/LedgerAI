@@ -274,7 +274,15 @@ def main() -> None:
     parser.add_argument("--duration", type=int, default=30)
     parser.add_argument("--users", type=int, default=64)
     parser.add_argument("--replicas", type=int, nargs="+", default=[1, 2, 4])
+    parser.add_argument(
+        "--skip-quota-run", action="store_true", help="skip the small-quota rate-limit run"
+    )
+    parser.add_argument(
+        "--source", default="cli", choices=["cli", "controller"], help="who started the run"
+    )
     args = parser.parse_args()
+    if any(r not in (1, 2, 4) for r in args.replicas):
+        parser.error("--replicas accepts only 1, 2 and 4")
     stack_control.ensure_local(stack_control.DEFAULT_BASE_URL)
     stack_control.ensure_database(BENCH_DB)
     RESULTS.mkdir(parents=True, exist_ok=True)
@@ -290,6 +298,13 @@ def main() -> None:
             check=False,
         ).stdout.strip(),
         "locust": LOCUST_IMAGE.rsplit(":", 1)[1],
+        "duration_s": args.duration,
+        "users": args.users,
+        "replicas": args.replicas,
+        "workloads": ["ReadHeavyUser", "MixedTransferUser"],
+        "database": BENCH_DB,
+        "source": args.source,
+        "environment": "local Docker Compose; load generator in a container on the same host",
     }
     results: list[Result] = []
     accounts_file = work / "accounts.json"
@@ -311,19 +326,22 @@ def main() -> None:
                 )
                 results.append(result)
 
-        print("== small write quota (50 burst, 20/s refill), 2 replicas")
-        configure(2, SMALL_QUOTA)
-        stack_control.reset_rate_limits()
-        result = Result("small-quota", 2, "MixedTransferUser", args.users, args.duration)
-        result.notes.append("write policy: burst 50, refill 20 tokens/s (shared by all replicas)")
-        run_locust(result, work / result.label, accounts_file)
-        expected = 50 + 20 * args.duration
-        result.notes.append(
-            f"admitted transfers: {result.transfers_admitted} "
-            f"(quota allows at most ~{expected} = 50 burst + 20/s x {args.duration} s)"
-        )
-        print(f"   admitted transfers {result.transfers_admitted}, 429s {result.rejected_429}")
-        results.append(result)
+        if not args.skip_quota_run:
+            print("== small write quota (50 burst, 20/s refill), 2 replicas")
+            configure(2, SMALL_QUOTA)
+            stack_control.reset_rate_limits()
+            result = Result("small-quota", 2, "MixedTransferUser", args.users, args.duration)
+            result.notes.append(
+                "write policy: burst 50, refill 20 tokens/s (shared by all replicas)"
+            )
+            run_locust(result, work / result.label, accounts_file)
+            expected = 50 + 20 * args.duration
+            result.notes.append(
+                f"admitted transfers: {result.transfers_admitted} "
+                f"(quota allows at most ~{expected} = 50 burst + 20/s x {args.duration} s)"
+            )
+            print(f"   admitted transfers {result.transfers_admitted}, 429s {result.rejected_429}")
+            results.append(result)
     finally:
         print("== restoring default stack")
         stack_control.restore_default()

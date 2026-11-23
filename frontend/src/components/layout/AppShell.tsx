@@ -1,6 +1,7 @@
 import { Menu, Moon, Sun } from "lucide-react";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
+import { LoadingRows } from "@/components/common/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/ui/dialog";
@@ -58,12 +59,14 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
           <NavEntry key={item.to} item={item} onNavigate={onNavigate} />
         ))}
       </div>
-      <div className="flex flex-col gap-0.5">
-        <div className="px-2.5 pb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">Roadmap</div>
-        {planned.map((item) => (
-          <NavEntry key={item.to} item={item} onNavigate={onNavigate} />
-        ))}
-      </div>
+      {planned.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          <div className="px-2.5 pb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">Roadmap</div>
+          {planned.map((item) => (
+            <NavEntry key={item.to} item={item} onNavigate={onNavigate} />
+          ))}
+        </div>
+      )}
     </nav>
   );
 }
@@ -119,7 +122,10 @@ export function AppShell() {
           </Button>
         </header>
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6">
-          <Outlet />
+          {/* Lab pages are code-split; the shell stays put while one loads. */}
+          <Suspense fallback={<LoadingRows rows={4} />}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

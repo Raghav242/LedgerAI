@@ -15,6 +15,7 @@ from app.api.dependencies import PrincipalDep
 from app.core.config import Settings
 from app.core.exceptions import RateLimiterUnavailableError, RateLimitExceededError
 from app.core.principal import Principal
+from app.observability.tracing import tracer
 from app.rate_limiting import RateLimitDecision, RateLimiter, RateLimitPolicy
 
 logger = logging.getLogger(__name__)
@@ -86,13 +87,22 @@ def rate_limit_headers(decision: RateLimitDecision) -> dict[str, str]:
 
 def _enforce(request: Request, scope: str, policy: RateLimitPolicy) -> None:
     limits: RateLimits = request.app.state.rate_limits
-    try:
-        decision = limits.limiter.allow_request(scope, policy)
-    except RateLimiterUnavailableError:
-        if policy.fail_open:
-            logger.warning("Rate limiter unavailable: FAIL-OPEN for policy=%s", policy.name)
-            return
-        raise
+    with tracer.start_as_current_span("rate_limit.check") as span:
+        span.set_attribute("ledgerflow.rate_limit.policy", policy.name)
+        try:
+            decision = limits.limiter.allow_request(scope, policy)
+        except RateLimiterUnavailableError:
+            span.set_attribute("ledgerflow.rate_limit.decision", "unavailable")
+            span.set_attribute("ledgerflow.rate_limit.fail_open", policy.fail_open)
+            if policy.fail_open:
+                logger.warning("Rate limiter unavailable: FAIL-OPEN for policy=%s", policy.name)
+                return
+            raise
+        span.set_attribute(
+            "ledgerflow.rate_limit.decision", "allowed" if decision.allowed else "rejected"
+        )
+        if decision.remaining is not None:
+            span.set_attribute("ledgerflow.rate_limit.remaining", decision.remaining)
     # Picked up by ResponseHeadersMiddleware for allowed and rejected responses alike.
     request.state.rate_limit_decision = decision
     if not decision.allowed:

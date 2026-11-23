@@ -2,6 +2,7 @@ import { Route } from "lucide-react";
 import { Disclosure } from "@/components/common/Disclosure";
 import { flowForOutcome, idleFlow, OUTCOME_LABEL, outcomeForCode } from "@/components/lab/flow/flowModel";
 import { RequestFlowDiagram } from "@/components/lab/flow/RequestFlowDiagram";
+import { LifecycleExplorer } from "@/features/observability/LifecycleExplorer";
 import type { TransferAttemptState } from "./transferAttempt";
 
 const KNOWN_REPLICAS = ["api-1", "api-2"];
@@ -52,6 +53,16 @@ export function TransferFlowCard({
         animate={!!outcome && !state.inFlight}
         showAsync={flowOutcome === "committed"}
       />
+      {outcome?.transfer && !state.inFlight && (
+        <Disclosure title="Full lifecycle, including the asynchronous event path" className="mt-3">
+          <LifecycleExplorer
+            key={`${outcome.transfer.id}-${last?.attempt ?? 0}`}
+            transferId={outcome.transfer.id}
+            traceId={outcome.meta?.traceId ?? null}
+            sync={{ meta: outcome.meta, status: outcome.status, replayed: outcome.replayed }}
+          />
+        </Disclosure>
+      )}
     </Disclosure>
   );
 }

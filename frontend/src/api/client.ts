@@ -25,6 +25,8 @@ export interface ResponseMeta {
   status: number;
   requestId: string | null;
   servedBy: string | null;
+  /** OpenTelemetry trace id (X-Trace-Id), only when backend tracing is on. */
+  traceId?: string | null;
   rateLimit: RateLimitInfo;
   retryAfterSeconds: number | null;
   idempotentReplayed: boolean;
@@ -109,6 +111,7 @@ function readMeta(response: Response, startedAt: number): ResponseMeta {
     status: response.status,
     requestId: h.get("x-request-id"),
     servedBy: h.get("x-served-by"),
+    traceId: h.get("x-trace-id"),
     rateLimit: {
       policy: h.get("x-ratelimit-policy"),
       limit: intHeader(h, "x-ratelimit-limit"),

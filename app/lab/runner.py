@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.api.rate_limit import RateLimits
 from app.core.config import Settings
 from app.lab.context import ExperimentContext, TransportFactory
-from app.lab.experiments import EXPERIMENTS, RUN_TIMEOUT_SECONDS
+from app.lab.experiments import EXPERIMENTS, RUN_TIMEOUT_SECONDS, ExperimentFn
 from app.lab.recorder import RunRecorder
 from app.lab.schemas import LabRunResult
 from app.lab.signing import LabTrafficSigner
@@ -42,8 +42,14 @@ class LabRunner:
         rate_limits: RateLimits,
         signer: LabTrafficSigner,
         transport_factory: TransportFactory | None = None,
+        experiments: dict[str, ExperimentFn] | None = None,
+        run_timeout_seconds: int = RUN_TIMEOUT_SECONDS,
     ) -> None:
         self.settings = settings
+        # The allow-list this runner may execute (the API's four by default; the local
+        # experiment controller passes its failure experiments instead).
+        self.experiments = experiments if experiments is not None else EXPERIMENTS
+        self.run_timeout_seconds = run_timeout_seconds
         self.store = LabRunStore(session_factory)
         self._session_factory = session_factory
         self._rate_limits = rate_limits
@@ -55,7 +61,7 @@ class LabRunner:
         self._threads: list[threading.Thread] = []
 
     def start(self, experiment: str, params: BaseModel) -> LabRun:
-        if experiment not in EXPERIMENTS:  # unreachable through the API schema; defence in depth
+        if experiment not in self.experiments:  # unreachable via the schemas; defence in depth
             raise ValueError(f"unknown experiment {experiment!r}")
         run = self.store.create(
             experiment=experiment,
@@ -113,7 +119,7 @@ class LabRunner:
                 detail=f"Measured traffic goes to {self.settings.lab_target_base_url}",
             )
             outcome = await asyncio.wait_for(
-                EXPERIMENTS[experiment](ctx, params), timeout=RUN_TIMEOUT_SECONDS
+                self.experiments[experiment](ctx, params), timeout=self.run_timeout_seconds
             )
             for item in outcome.checks:
                 recorder.check(item)
@@ -133,7 +139,7 @@ class LabRunner:
                 level="success" if not failed else "error",
             )
         except TimeoutError:
-            error = f"The run exceeded its {RUN_TIMEOUT_SECONDS} s limit and was stopped."
+            error = f"The run exceeded its {self.run_timeout_seconds} s limit and was stopped."
         except asyncio.CancelledError:
             error = "The run was cancelled because its replica is shutting down."
         except Exception as exc:

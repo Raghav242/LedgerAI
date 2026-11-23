@@ -1,0 +1,122 @@
+{
+ "available": true,
+ "version": "iforest-v1",
+ "algorithm": "scikit-learn IsolationForest (n_estimators=200, max_samples=256)",
+ "features": [
+  "log_amount",
+  "amount_vs_baseline",
+  "log_prior_transfers",
+  "burst_60s",
+  "log_secs_since_prev",
+  "log_account_age"
+ ],
+ "threshold": 0.62187,
+ "threshold_rule": "maximises F1 on the validation split",
+ "score_meaning": "negated IsolationForest score_samples; higher = more unusual. Not a probability.",
+ "trained_at": "2026-11-20T21:06:29+00:00",
+ "environment": {
+  "python": "3.13.5",
+  "scikit_learn": "1.9.1",
+  "numpy": "2.5.5"
+ },
+ "dataset": {
+  "kind": "synthetic, compressed clock (see app/ai/synthetic.py)",
+  "rows": 128076,
+  "split": "60/20/20 by account",
+  "train": {
+   "normal": 76657,
+   "large": 1053,
+   "burst": 178,
+   "new_account": 28
+  },
+  "validation": {
+   "normal": 24321,
+   "large": 330,
+   "burst": 36,
+   "new_account": 8
+  },
+  "test": {
+   "normal": 25070,
+   "large": 334,
+   "burst": 49,
+   "new_account": 12
+  }
+ },
+ "reference": {
+  "log_amount": {
+   "p05": 2.4493,
+   "median": 3.7575,
+   "p95": 5.2608
+  },
+  "amount_vs_baseline": {
+   "p05": -0.5937,
+   "median": 0.0,
+   "p95": 0.6326
+  },
+  "log_prior_transfers": {
+   "p05": 1.7918,
+   "median": 3.989,
+   "p95": 5.3799
+  },
+  "burst_60s": {
+   "p05": 0.0,
+   "median": 4.0,
+   "p95": 11.0
+  },
+  "log_secs_since_prev": {
+   "p05": 0.9298,
+   "median": 2.2714,
+   "p95": 4.0732
+  },
+  "log_account_age": {
+   "p05": 4.8824,
+   "median": 6.8237,
+   "p95": 7.4469
+  }
+ },
+ "evaluation": {
+  "split": "held-out test accounts (never seen in training or threshold selection)",
+  "model": {
+   "precision": 0.7662,
+   "recall": 0.6886,
+   "f1": 0.7253,
+   "false_positive_rate": 0.0033,
+   "tp": 272,
+   "fp": 83,
+   "fn": 123,
+   "tn": 24987,
+   "recall_by_kind": {
+    "large": 0.7784,
+    "burst": 0.0,
+    "new_account": 1.0
+   }
+  },
+  "rule_baseline": {
+   "precision": 0.9724,
+   "recall": 0.9823,
+   "f1": 0.9773,
+   "false_positive_rate": 0.0004,
+   "tp": 388,
+   "fp": 11,
+   "fn": 7,
+   "tn": 25059,
+   "recall_by_kind": {
+    "large": 0.985,
+    "burst": 1.0,
+    "new_account": 0.8333
+   }
+  },
+  "inference_latency_ms_single_row_cpu": {
+   "p50": 19.449,
+   "p95": 22.789,
+   "samples": 300
+  }
+ },
+ "limitations": [
+  "Trained and evaluated on synthetic data only; says nothing about real-world fraud.",
+  "Labels are the generator's intent; the model never sees them during training.",
+  "Compressed clock: seconds stand in for hours or days so lab scenarios run live.",
+  "Only the source account's own history is used (no counterparties, devices, geography).",
+  "The score is relative unusualness, not a probability."
+ ]
+}

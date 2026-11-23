@@ -149,12 +149,11 @@ test("create, fund, transfer, and verify through the real API", async ({ page })
   await expect(page.getByText("Illustrative example")).toBeVisible();
   await shot(page, "ledger-reconciliation");
 
-  // Roadmap pages stay clearly labelled (Experiment Lab and Topology are live since Phase 5B;
-  // see experiment-lab.spec.ts).
-  for (const route of ["/anomalies", "/performance"]) {
-    await page.goto(route);
-    await expect(page.getByText(/not functional yet/)).toBeVisible();
-  }
+  // Every lab page is functional now (Phase 5E); recorded data is labelled as recorded.
+  await page.goto("/performance");
+  await expect(page.getByText("Recorded results, not live")).toBeVisible();
+  await page.goto("/anomalies");
+  await expect(page.getByRole("heading", { name: "AI Anomaly Lab" })).toBeVisible();
 
   // Back on the overview, the new transfer is listed and the activity chart has rendered.
   await page.goto("/");

@@ -4,10 +4,21 @@ import { AppShell } from "@/components/layout/AppShell";
 import { HistoryPage } from "@/features/history/HistoryPage";
 import { LedgerPage } from "@/features/ledger/LedgerPage";
 import { OverviewPage } from "@/features/overview/OverviewPage";
-import { ExperimentLabPage } from "@/features/lab/ExperimentLabPage";
-import { AnomalyLabPage, PerformanceLabPage } from "@/features/planned/PlannedPages";
-import { TopologyPage } from "@/features/topology/TopologyPage";
 import { PlaygroundPage } from "@/features/transfers/PlaygroundPage";
+import {
+  AnomalyLabPage,
+  EventPipelinePage,
+  ExperimentLabPage,
+  GuidedDemoPage,
+  PerformanceLabPage,
+  TopologyPage,
+} from "./lazyPages";
+
+/*
+ * The everyday pages load with the app. The labs (larger, and the Performance Lab pulls in
+ * the charting library) are separate chunks, loaded on first visit inside the shell's
+ * <Suspense> boundary, so navigation stays visible while they load.
+ */
 
 export const routes: RouteObject[] = [
   {
@@ -18,8 +29,10 @@ export const routes: RouteObject[] = [
       { path: "playground", element: <PlaygroundPage /> },
       { path: "history", element: <HistoryPage /> },
       { path: "ledger", element: <LedgerPage /> },
+      { path: "demo", element: <GuidedDemoPage /> },
       { path: "experiments", element: <ExperimentLabPage /> },
       { path: "topology", element: <TopologyPage /> },
+      { path: "events", element: <EventPipelinePage /> },
       { path: "anomalies", element: <AnomalyLabPage /> },
       { path: "performance", element: <PerformanceLabPage /> },
       { path: "*", element: <NotFound /> },

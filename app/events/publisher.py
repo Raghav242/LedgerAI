@@ -24,8 +24,10 @@ import signal
 import threading
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import pika
+from opentelemetry.trace import SpanKind
 from pika.adapters.blocking_connection import BlockingChannel
 from pika.exceptions import AMQPError, NackError, UnroutableError
 from sqlalchemy.exc import SQLAlchemyError
@@ -37,6 +39,14 @@ from app.core.logging import configure_logging
 from app.events.backoff import backoff_ms
 from app.events.heartbeat import beat
 from app.events.rabbitmq import Topology, connect, declare_topology, persistent_properties
+from app.observability.heartbeats import HeartbeatReporter
+from app.observability.tracing import (
+    configure_tracing,
+    context_from_trace_parent,
+    inject_headers,
+    instrument_worker_engine,
+    tracer,
+)
 from app.repositories.outbox_repository import ClaimedEvent, OutboxRepository
 
 logger = logging.getLogger(__name__)
@@ -68,6 +78,15 @@ class OutboxPublisher:
         self._connect = connect_fn
         self._connection: pika.BlockingConnection | None = None
         self._channel: BlockingChannel | None = None
+        self.heartbeat = HeartbeatReporter(
+            session_factory,
+            component="outbox-publisher",
+            instance=settings.replica_id,
+            interval_seconds=settings.heartbeat_interval_seconds,
+        )
+        self.totals = {"published": 0, "failed": 0}
+        self._broker_ok_at: datetime | None = None
+        self._last_batch_at: datetime | None = None
 
     # --- broker connection ---------------------------------------------------------------
 
@@ -149,17 +168,77 @@ class OutboxPublisher:
         return report
 
     def _publish(self, channel: BlockingChannel, event: ClaimedEvent) -> None:
-        channel.basic_publish(
-            exchange=self._topology.exchange,
-            routing_key=event.event_type,
-            body=event.envelope().to_json(),
-            properties=persistent_properties(
-                message_id=str(event.id),
-                event_type=event.event_type,
-                correlation_id=event.correlation_id,
-                headers={"event_version": event.event_version},
-            ),
-            mandatory=True,  # unroutable -> UnroutableError instead of silently dropped
+        # Continues the trace of the request that committed the event (if it was traced);
+        # consumers continue it from the `traceparent` header added here.
+        with tracer.start_as_current_span(
+            "outbox.publish",
+            context=context_from_trace_parent(event.trace_parent),
+            kind=SpanKind.PRODUCER,
+        ) as span:
+            span.set_attribute("messaging.system", "rabbitmq")
+            span.set_attribute("messaging.destination.name", self._topology.exchange)
+            span.set_attribute("messaging.message.id", str(event.id))
+            span.set_attribute("ledgerflow.event.type", event.event_type)
+            span.set_attribute("ledgerflow.outbox.attempt", event.attempts)
+            channel.basic_publish(
+                exchange=self._topology.exchange,
+                routing_key=event.event_type,
+                body=event.envelope().to_json(),
+                properties=persistent_properties(
+                    message_id=str(event.id),
+                    event_type=event.event_type,
+                    correlation_id=event.correlation_id,
+                    headers=inject_headers({"event_version": event.event_version}),
+                ),
+                mandatory=True,  # unroutable -> UnroutableError instead of silently dropped
+            )
+
+    # --- heartbeat -------------------------------------------------------------------------
+
+    def report(self, *, problem: str | None = None, retry_in_s: float = 0) -> None:
+        """Self-report for the live topology (throttled; forced when there is a problem)."""
+        if problem is None and not self.heartbeat.due():
+            return
+        connected = self._channel is not None and self._channel.is_open
+        if connected:
+            self._broker_ok_at = datetime.now(UTC)
+        broker_down = problem is not None and problem.startswith("broker")
+        if problem is None:
+            summary = "Polling the outbox and publishing with broker confirms."
+        elif broker_down:
+            summary = "Cannot reach RabbitMQ; committed events wait safely in the outbox."
+        else:
+            summary = "Cannot reach PostgreSQL; retrying with back-off."
+        details = {
+            "summary": summary,
+            # Only a statement about the broker when we actually know it.
+            "broker_connected": True if connected else (False if broker_down else None),
+            "broker_ok_at": self._broker_ok_at.isoformat() if self._broker_ok_at else None,
+            "metrics": [
+                {
+                    "key": "published",
+                    "label": "Published since start",
+                    "value": self.totals["published"],
+                },
+                {
+                    "key": "failed",
+                    "label": "Failed attempts since start",
+                    "value": self.totals["failed"],
+                },
+                {
+                    "key": "last_batch_at",
+                    "label": "Last non-empty batch",
+                    "value": self._last_batch_at.isoformat() if self._last_batch_at else None,
+                },
+            ],
+        }
+        if problem is not None:
+            self.heartbeat.record_error(problem)
+        self.heartbeat.beat(
+            "ok" if problem is None else "degraded",
+            details,
+            force=problem is not None,
+            next_within_seconds=retry_in_s,
         )
 
     # --- main loop -------------------------------------------------------------------------
@@ -180,8 +259,21 @@ class OutboxPublisher:
                 )
                 logger.warning("Publisher cannot make progress (%r); retrying in %d ms", exc, delay)
                 self.close()
+                kind = "database" if isinstance(exc, SQLAlchemyError) else "broker"
+                self.report(
+                    problem=f"{kind} unavailable: {type(exc).__name__}", retry_in_s=delay / 1000
+                )
                 stop.wait(delay / 1000)
                 continue
+            self.totals["published"] += report.published
+            self.totals["failed"] += report.failed_count
+            if report.claimed:
+                self._last_batch_at = datetime.now(UTC)
+            if report.failed_count:
+                self.heartbeat.record_error(
+                    f"{report.failed_count} event(s) not published: {', '.join(report.failed)}"
+                )
+            self.report()
             if report.claimed:
                 logger.info(
                     "Outbox batch claimed=%d published=%d failed=%d",
@@ -210,7 +302,10 @@ def main() -> None:
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
+    tracing = configure_tracing(settings, service_name="ledgerflow-outbox-publisher")
     engine = create_db_engine(settings)
+    if tracing:
+        instrument_worker_engine(engine)
     publisher = OutboxPublisher(settings, create_session_factory(engine))
     logger.info("Outbox publisher starting (batch=%d)", settings.outbox_batch_size)
     try:

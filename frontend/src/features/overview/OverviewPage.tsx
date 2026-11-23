@@ -1,4 +1,4 @@
-import { ArrowLeftRight, ArrowRight, Banknote, BarChart3, ShieldAlert, ShieldCheck, Users, Wifi, WifiOff } from "lucide-react";
+import { ArrowLeftRight, ArrowRight, Banknote, BarChart3, Compass, ShieldAlert, ShieldCheck, Users, Wifi, WifiOff } from "lucide-react";
 import { lazy, Suspense, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
 import { DataSourceTag, PageHeader } from "@/components/common/display";
@@ -40,6 +40,18 @@ export function OverviewPage() {
         description="A live snapshot of the system. Every number comes from the running backend."
         actions={<DataSourceTag kind="live" />}
       />
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-4 py-3">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">New here?</div>
+          <p className="text-sm text-muted-foreground">Seven scenarios, from a single transfer to a broker outage, in about fifteen minutes.</p>
+        </div>
+        <Button asChild size="sm">
+          <Link to="/demo">
+            <Compass /> Start guided demo
+          </Link>
+        </Button>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard

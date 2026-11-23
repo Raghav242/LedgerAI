@@ -59,6 +59,7 @@ class ClaimedEvent:
     correlation_id: str | None
     created_at: datetime
     attempts: int
+    trace_parent: str | None = None
 
     def envelope(self) -> EventEnvelope:
         return EventEnvelope(
@@ -96,7 +97,7 @@ _CLAIM_SQL = text(
     FROM candidates
     WHERE o.id = candidates.id
     RETURNING o.id, o.event_type, o.event_version, o.aggregate_id, o.payload,
-              o.correlation_id, o.created_at, o.attempts
+              o.correlation_id, o.created_at, o.attempts, o.trace_parent
     """
 )
 

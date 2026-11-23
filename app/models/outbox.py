@@ -41,6 +41,8 @@ class OutboxEvent(Base):
             "available_at",
             postgresql_where=text("status <> 'published'"),
         ),
+        # Event Pipeline page: newest-first keyset pages (migration 0005).
+        Index("ix_outbox_events_created_at", "created_at", "id"),
     )
 
     # Deterministic: uuid5(event_type + aggregate operation id). See app/events/ids.py.
@@ -50,6 +52,9 @@ class OutboxEvent(Base):
     event_version: Mapped[int] = mapped_column(Integer)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     correlation_id: Mapped[str | None] = mapped_column(String(128))
+    # W3C traceparent of the request that committed this event (None when tracing is off).
+    # Lets the publisher and consumers continue the same distributed trace.
+    trace_parent: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), server_default=text("'pending'"))
     attempts: Mapped[int] = mapped_column(Integer, server_default=text("0"))
     available_at: Mapped[datetime] = mapped_column(

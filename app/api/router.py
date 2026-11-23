@@ -1,6 +1,16 @@
 from fastapi import APIRouter
 
-from app.api.routes import accounts, lab, ledger, reconciliation, stats, transfers
+from app.api.routes import (
+    accounts,
+    ai,
+    lab,
+    ledger,
+    observability,
+    performance,
+    reconciliation,
+    stats,
+    transfers,
+)
 
 
 def build_api_router(*, include_dev_endpoints: bool) -> APIRouter:
@@ -15,4 +25,9 @@ def build_api_router(*, include_dev_endpoints: bool) -> APIRouter:
         # The Experiment Lab mints simulated money for its own accounts and generates
         # load: development-only, like the funding endpoint.
         router.include_router(lab.router)
+        # Read-only live topology, event pipeline and traces (reveals internal topology).
+        router.include_router(observability.router)
+        # Read-only AI anomaly results and model card (the worker scores asynchronously).
+        router.include_router(ai.router)
+        router.include_router(performance.router)
     return router

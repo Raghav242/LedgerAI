@@ -1,6 +1,8 @@
 import { CheckCircle2, XCircle } from "lucide-react";
 import { IdText, KeyValue, KindBadge, Money, StatusBadge } from "@/components/common/display";
+import { Disclosure } from "@/components/common/Disclosure";
 import { ErrorState, LoadingRows } from "@/components/common/states";
+import { LifecycleExplorer } from "@/features/observability/LifecycleExplorer";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useTransfer, useTransferLedgerEntries } from "@/hooks/queries";
@@ -77,6 +79,12 @@ function TransferDetailBody({ transferId, nameOf }: { transferId: string; nameOf
           <LedgerPair entries={entries.data ?? []} nameOf={nameOf} />
         )}
       </section>
+
+      {t.kind !== "legacy_opening_balance" && (
+        <Disclosure variant="boxed" title="Lifecycle: request → commit → events">
+          <LifecycleExplorer transferId={t.id} />
+        </Disclosure>
+      )}
     </div>
   );
 }

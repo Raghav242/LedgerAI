@@ -27,8 +27,17 @@ SECRET = b"0123456789abcdef-test-secret"
 
 def test_catalog_registry_and_param_models_cover_exactly_the_same_experiments() -> None:
     catalog_ids = {e.id for e in experiment_catalog()}
-    assert catalog_ids == set(EXPERIMENTS) == set(PARAMS_BY_EXPERIMENT)
-    assert catalog_ids == {"concurrency", "idempotency", "rate_limiting", "load_balancing"}
+    assert catalog_ids == set(PARAMS_BY_EXPERIMENT)
+    # The API can run exactly the traffic-only experiments (lab four + the AI scenario)...
+    safe = {e.id for e in experiment_catalog() if e.runner == "api"}
+    assert safe == {"concurrency", "idempotency", "rate_limiting", "load_balancing"}
+    ai = {e.id for e in experiment_catalog() if e.runner == "ai"}
+    assert ai == {"anomaly_scenario"}
+    assert safe | ai == set(EXPERIMENTS)
+    # ...and the infrastructure experiments are listed for the UI but run elsewhere.
+    infra = {e.id for e in experiment_catalog() if e.runner == "controller"}
+    assert infra == {"redis_outage", "rabbitmq_outage", "worker_crash", "replica_failure"}
+    assert not infra & set(EXPERIMENTS)
 
 
 def test_catalog_param_specs_mirror_the_validation_bounds() -> None:
@@ -39,8 +48,12 @@ def test_catalog_param_specs_mirror_the_validation_bounds() -> None:
     assert specs["requests"].default == 100
     assert specs["amount_minor"].unit == "cents"
     for definition in experiment_catalog():
-        assert definition.risk == "safe_local"
-        assert definition.available
+        if definition.runner in ("api", "ai"):
+            assert definition.risk == "safe_local"
+            assert definition.available
+        else:  # never startable through the API
+            assert definition.risk == "infrastructure"
+            assert not definition.available and definition.unavailable_reason
         for spec in definition.params:
             assert spec.minimum <= spec.default <= spec.maximum
 
@@ -203,3 +216,11 @@ def test_per_replica_counters_admit_capacity_per_replica() -> None:
     assert per_replica_counterfactual(["api-1", "api-2"] * 25, policy) == 20
     assert per_replica_counterfactual(["api-1"] * 50, policy) == 10
     assert tokens_per_second(RateLimitPolicy("write", 20, 10, 1000)) == 10
+
+
+@pytest.mark.parametrize(
+    "experiment", ["redis_outage", "rabbitmq_outage", "worker_crash", "replica_failure"]
+)
+def test_the_api_refuses_to_start_infrastructure_experiments(experiment: str) -> None:
+    with pytest.raises(ValidationError):
+        RUN_CREATE.validate_python({"experiment": experiment})

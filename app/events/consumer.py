@@ -27,9 +27,11 @@ import signal
 import threading
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from enum import StrEnum
 
 import pika
+from opentelemetry.trace import SpanKind
 from pika.adapters.blocking_connection import BlockingChannel
 from pika.exceptions import AMQPError
 from pika.spec import Basic, BasicProperties
@@ -46,6 +48,13 @@ from app.events.heartbeat import beat
 from app.events.rabbitmq import Topology, connect, declare_topology, persistent_properties
 from app.events.schemas import EventEnvelope, InvalidEventError, parse_envelope
 from app.models import EventAuditEntry, ProcessedEvent
+from app.observability.heartbeats import HeartbeatReporter
+from app.observability.tracing import (
+    configure_tracing,
+    extract_context,
+    instrument_worker_engine,
+    tracer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +166,7 @@ class EventConsumer:
         *,
         topology: Topology | None = None,
         connect_fn=connect,  # type: ignore[no-untyped-def]
+        heartbeat: HeartbeatReporter | None = None,
     ) -> None:
         self._settings = settings
         self._handler = handler
@@ -165,7 +175,10 @@ class EventConsumer:
         self._connection: pika.BlockingConnection | None = None
         self._channel: BlockingChannel | None = None
         self._publish_channel: BlockingChannel | None = None  # confirms, for retry/DLQ
+        self._stats_channel: BlockingChannel | None = None  # passive declares (queue depths)
         self.counts: dict[Outcome, int] = dict.fromkeys(Outcome, 0)
+        self._heartbeat = heartbeat
+        self._broker_ok_at: datetime | None = None
 
     # --- connection ----------------------------------------------------------------------
 
@@ -187,7 +200,7 @@ class EventConsumer:
 
     def close(self) -> None:
         connection = self._connection
-        self._connection = self._channel = self._publish_channel = None
+        self._connection = self._channel = self._publish_channel = self._stats_channel = None
         if connection is not None and connection.is_open:
             with contextlib.suppress(AMQPError):
                 connection.close()
@@ -209,12 +222,24 @@ class EventConsumer:
             return self._dead_letter(channel, method, properties, body, f"invalid event: {exc}")
 
         attempt = retries_so_far + 1
+        redelivered = bool(getattr(method, "redelivered", False))
         try:
-            outcome = self._handler.handle(
-                event,
-                delivery_attempt=attempt,
-                redelivered=bool(getattr(method, "redelivered", False)),
-            )
+            # Continues the request's trace from the `traceparent` header (if any).
+            with tracer.start_as_current_span(
+                f"event.consume {self._topology.consumer_name}",
+                context=extract_context(headers),
+                kind=SpanKind.CONSUMER,
+            ) as span:
+                span.set_attribute("messaging.system", "rabbitmq")
+                span.set_attribute("messaging.message.id", str(event.event_id))
+                span.set_attribute("ledgerflow.event.type", event.event_type)
+                span.set_attribute("ledgerflow.consumer", self._topology.consumer_name)
+                span.set_attribute("ledgerflow.delivery_attempt", attempt)
+                span.set_attribute("ledgerflow.redelivered", redelivered)
+                outcome = self._handler.handle(
+                    event, delivery_attempt=attempt, redelivered=redelivered
+                )
+                span.set_attribute("ledgerflow.consume.outcome", str(outcome))
         except Exception as exc:
             if not is_transient(exc):
                 return self._dead_letter(channel, method, properties, body, f"permanent: {exc}")
@@ -306,6 +331,83 @@ class EventConsumer:
             headers={**(properties.headers or {}), **extra_headers},
         )
 
+    # --- heartbeat -------------------------------------------------------------------------
+
+    def queue_depths(self) -> list[dict]:
+        """Ready / consumer counts of this consumer's queues (passive declares, read-only)."""
+        if self._connection is None or not self._connection.is_open:
+            return []
+        roles = [(self._topology.queue, "main"), (self._topology.dead_letter_queue, "dead_letter")]
+        roles += [
+            (self._topology.retry_queue(i), "retry")
+            for i in range(1, len(self._topology.retry_delays_ms) + 1)
+        ]
+        depths = []
+        try:
+            if self._stats_channel is None or not self._stats_channel.is_open:
+                self._stats_channel = self._connection.channel()
+            for queue, role in roles:
+                frame = self._stats_channel.queue_declare(queue, passive=True)
+                depths.append(
+                    {
+                        "queue": queue,
+                        "role": role,
+                        "ready": frame.method.message_count,
+                        "consumers": frame.method.consumer_count,
+                    }
+                )
+        except AMQPError:
+            self._stats_channel = None
+            return []
+        return depths
+
+    def report(self, *, problem: str | None = None, retry_in_s: float = 0) -> None:
+        """Self-report for the live topology (throttled; forced when there is a problem)."""
+        if self._heartbeat is None or (problem is None and not self._heartbeat.due()):
+            return
+        connected = problem is None and self._connection is not None and self._connection.is_open
+        if connected:
+            self._broker_ok_at = datetime.now(UTC)
+        counts = {str(k): v for k, v in self.counts.items()}
+        details = {
+            "summary": (
+                f"Consuming {self._topology.queue} with manual acks."
+                if connected
+                else "Cannot reach RabbitMQ; reconnecting with back-off."
+            ),
+            "consumer": self._topology.consumer_name,
+            "broker_connected": connected,
+            "broker_ok_at": self._broker_ok_at.isoformat() if self._broker_ok_at else None,
+            "counts": counts,
+            "queues": self.queue_depths() if connected else [],
+            "metrics": [
+                {
+                    "key": "processed",
+                    "label": "Processed since start",
+                    "value": counts["processed"],
+                },
+                {"key": "duplicate", "label": "Duplicates ignored", "value": counts["duplicate"]},
+                {
+                    "key": "retry_scheduled",
+                    "label": "Retries scheduled",
+                    "value": counts["retry_scheduled"],
+                },
+                {
+                    "key": "dead_lettered",
+                    "label": "Dead-lettered",
+                    "value": counts["dead_lettered"],
+                },
+            ],
+        }
+        if problem is not None:
+            self._heartbeat.record_error(problem)
+        self._heartbeat.beat(
+            "ok" if connected else "degraded",
+            details,
+            force=problem is not None,
+            next_within_seconds=retry_in_s,
+        )
+
     # --- main loop -------------------------------------------------------------------------
 
     def run_forever(self, stop: threading.Event) -> None:
@@ -326,6 +428,7 @@ class EventConsumer:
                 failures = 0
                 while not stop.is_set():
                     beat()
+                    self.report()
                     assert self._connection is not None
                     self._connection.process_data_events(time_limit=1)
                 # Graceful shutdown: stop new deliveries; unacked ones are requeued when
@@ -337,20 +440,34 @@ class EventConsumer:
                 logger.warning(
                     "Consumer connection problem (%r); reconnecting in %d ms", exc, delay
                 )
+                self.close()
+                self.report(
+                    problem=f"broker unavailable: {type(exc).__name__}", retry_in_s=delay / 1000
+                )
                 stop.wait(delay / 1000)
             finally:
                 self.close()
 
 
 def build_consumer(settings: Settings) -> tuple[EventConsumer, object]:
+    tracing = configure_tracing(settings, service_name=f"ledgerflow-{settings.consumer_name}")
     engine = create_db_engine(settings)
+    if tracing:
+        instrument_worker_engine(engine)
+    sessions = create_session_factory(engine)
     handler = AuditHandler(
-        create_session_factory(engine),
+        sessions,
         settings.consumer_name,
         before_commit=_exit_on(settings.consumer_crash_before_commit_event, 70, "before commit"),
         after_commit=_exit_on(settings.consumer_crash_after_commit_event, 71, "after commit"),
     )
-    return EventConsumer(settings, handler), engine
+    heartbeat = HeartbeatReporter(
+        sessions,
+        component="event-consumer",
+        instance=settings.replica_id,
+        interval_seconds=settings.heartbeat_interval_seconds,
+    )
+    return EventConsumer(settings, handler, heartbeat=heartbeat), engine
 
 
 def main() -> None:

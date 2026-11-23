@@ -1,205 +1,133 @@
-import { FlaskConical } from "lucide-react";
+import { Network, RefreshCw } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router";
-import { DataSourceTag, PageHeader } from "@/components/common/display";
+import { isApiError } from "@/api/client";
 import { Disclosure } from "@/components/common/Disclosure";
-import { Tabs } from "@/components/common/Tabs";
-import { aggregateFlow, asIllustration, flowForOutcome, type FlowModel } from "@/components/lab/flow/flowModel";
-import { ReplicaDistribution } from "@/components/lab/flow/ReplicaDistribution";
-import { RequestFlowDiagram, type RequestFlowDiagramProps } from "@/components/lab/flow/RequestFlowDiagram";
+import { PageHeader } from "@/components/common/display";
+import { StatusSummary } from "@/components/common/StatusSummary";
+import { EmptyState, ErrorState, LoadingRows } from "@/components/common/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { tabPanelProps } from "@/lib/a11y";
-import { cn } from "@/lib/utils";
+import { ago } from "@/features/observability/healthMeta";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
+import type { ComponentHealth } from "@/types/api";
+import { ComponentDetails } from "./ComponentDetails";
+import { RequestFlowPresets } from "./RequestFlowPresets";
+import { TopologyDiagram, TopologyList } from "./TopologyDiagram";
+import { useLiveTopology } from "./useLiveTopology";
 
-const REPLICAS = ["api-1", "api-2"];
-const LB_SEQUENCE = ["api-1", "api-2", "api-1", "api-2", "api-1", "api-2", "api-1", "api-2"];
+const PROBLEM = new Set(["degraded", "unhealthy", "stale", "unknown"]);
 
-type PresetId = "transfer" | "replay" | "rate-limit" | "insufficient" | "load-balancing";
-
-interface Preset {
-  id: PresetId;
-  label: string;
-  model: FlowModel;
-  steps: string[];
-  experiment?: string;
-  showAsync: boolean;
-  mode: "single" | "aggregate";
+function verdict(components: ComponentHealth[], stale: boolean) {
+  const considered = components.filter((c) => c.status !== "not_configured");
+  const problems = considered.filter((c) => PROBLEM.has(c.status));
+  if (stale) return { tone: "muted" as const, title: "Live status is out of date", problems };
+  if (problems.length === 0) return { tone: "success" as const, title: `All ${considered.length} components healthy`, problems };
+  const bad = problems.some((c) => c.status === "unhealthy");
+  return {
+    tone: bad ? ("destructive" as const) : ("warning" as const),
+    title: `${problems.length} of ${considered.length} components need attention`,
+    problems,
+  };
 }
 
-const PRESETS: Preset[] = [
-  {
-    id: "transfer",
-    label: "Transfer",
-    model: asIllustration(flowForOutcome("committed", { replica: "api-1", replicas: REPLICAS, status: 201 })),
-    showAsync: true,
-    mode: "single",
-    experiment: "concurrency",
-    steps: [
-      "NGINX picks the next replica (round robin) and adds X-Request-ID.",
-      "The replica takes one token from the shared write bucket in Redis.",
-      "One PostgreSQL transaction: claim the Idempotency-Key, lock both account rows in id order, check funds, update balances.",
-      "Insert the transfer, one debit and one credit ledger entry, and a transfer.completed outbox row.",
-      "COMMIT once: money, ledger, event and the key's stored response become durable together. 201 Created.",
-      "Later, the outbox publisher sends the event to RabbitMQ and the consumer applies it exactly once.",
-    ],
-  },
-  {
-    id: "replay",
-    label: "Idempotent replay",
-    model: asIllustration(flowForOutcome("replayed", { replica: "api-2", replicas: REPLICAS, status: 201 })),
-    showAsync: false,
-    mode: "single",
-    experiment: "idempotency",
-    steps: [
-      "A retry arrives with the same Idempotency-Key and the same body, possibly at the other replica.",
-      "The claim INSERT finds the key already completed (it waits if the first request is still running).",
-      "The stored response is returned byte for byte with Idempotent-Replayed: true.",
-      "No row lock, no balance change, no new ledger entry, no new event.",
-    ],
-  },
-  {
-    id: "rate-limit",
-    label: "Rate-limit rejection",
-    model: asIllustration(flowForOutcome("rate_limited", { replica: "api-1", replicas: REPLICAS, status: 429 })),
-    showAsync: false,
-    mode: "single",
-    experiment: "rate_limiting",
-    steps: [
-      "The replica asks Redis for a token: one atomic Lua script on the bucket shared by every replica.",
-      "The bucket is empty, so the request is refused before a database session is even opened.",
-      "429 RATE_LIMITED with Retry-After and X-RateLimit-* headers; retrying later with the same key is safe.",
-    ],
-  },
-  {
-    id: "insufficient",
-    label: "Insufficient funds",
-    model: asIllustration(flowForOutcome("insufficient_funds", { replica: "api-2", replicas: REPLICAS, status: 409 })),
-    showAsync: false,
-    mode: "single",
-    experiment: "concurrency",
-    steps: [
-      "Admitted by the rate limiter; the key is claimed.",
-      "Both rows are locked; the current balance is too low.",
-      "Rolled back to a savepoint, then the rejection is stored as the key's final outcome and committed.",
-      "409 INSUFFICIENT_FUNDS. Retrying with the same key replays the same rejection.",
-    ],
-  },
-  {
-    id: "load-balancing",
-    label: "Load balancing",
-    model: asIllustration(
-      aggregateFlow(
-        LB_SEQUENCE.map((replica) => ({ outcome: "read_ok" as const, replica })),
-        "Eight reads: NGINX alternates between the replicas; both answer identically because all state is in PostgreSQL and Redis.",
-        REPLICAS,
-      ),
-    ),
-    showAsync: false,
-    mode: "aggregate",
-    experiment: "load_balancing",
-    steps: [
-      "NGINX is the only published entry point; replicas are reachable only on the internal network.",
-      "Each new request goes to the next replica in turn. A replica that refuses connections is skipped for GETs.",
-      "Replicas are stateless: any replica can serve any request, so adding replicas adds capacity.",
-    ],
-  },
-];
-
-/** Deployment facts per drawn component, shown in the node details panel. From docker-compose.yml. */
-const COMPONENT_INFO: RequestFlowDiagramProps["componentInfo"] = {
-  client: "This React app (Vite on :5173) proxies /api and /health to NGINX, so the browser never needs CORS.",
-  nginx: "nginx:1.28 on :8080, the only published API port. Retries connect failures for safe requests only.",
-  replica: "Compose services api-1 and api-2 (default). api-3 and api-4 are optional (--profile scale4, NGINX_UPSTREAMS=4).",
-  redis: "redis:7.4, no persistence: rate-limit state is ephemeral and holds no financial data.",
-  database: "postgres:16. Accounts, transfers, the double-entry ledger, idempotency records, the transactional outbox and lab runs.",
-  outbox: "The outbox-publisher service claims committed rows with SKIP LOCKED under a lease and publishes them with confirms.",
-  rabbitmq: "rabbitmq:4.1. Durable quorum queues, retry tiers and a dead-letter queue. Single node, not highly available.",
-  worker: "The event-consumer service. An AI anomaly worker (Phase 4B) is planned, not implemented.",
-};
-
-type ComponentStatus = "default stack" | "optional" | "planned";
-
-const COMPONENTS: { name: string; role: string; status: ComponentStatus }[] = [
-  { name: "React frontend", role: "This app", status: "default stack" },
-  { name: "NGINX", role: "Gateway, load balancer", status: "default stack" },
-  { name: "api-1, api-2", role: "FastAPI replicas", status: "default stack" },
-  { name: "api-3, api-4", role: "Extra replicas", status: "optional" },
-  { name: "Redis", role: "Rate limiter", status: "default stack" },
-  { name: "PostgreSQL", role: "System of record", status: "default stack" },
-  { name: "outbox-publisher", role: "Event relay", status: "default stack" },
-  { name: "RabbitMQ", role: "Message broker", status: "default stack" },
-  { name: "event-consumer", role: "Audit worker", status: "default stack" },
-  { name: "AI anomaly worker", role: "Phase 4B", status: "planned" },
-];
-
-/** Static architecture: pick a flow, see its path, click a component for details. No live state. */
+/** Live architecture: each component's real status, click one for details. */
 export function TopologyPage() {
-  const [presetId, setPresetId] = useState<PresetId>("transfer");
-  const preset = PRESETS.find((p) => p.id === presetId) ?? PRESETS[0]!;
+  const live = useLiveTopology();
+  const wide = useMediaQuery("(min-width: 768px)");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = live.components.find((c) => c.id === selectedId) ?? null;
+  const disabled = isApiError(live.error) && live.error.status === 404 && !live.snapshot;
+
+  const updated =
+    live.snapshotAgeMs === null ? null : `Updated ${ago(live.snapshotAgeMs / 1000)} by ${live.snapshot?.observed_by ?? "?"}`;
+
   return (
     <div className="space-y-6">
       <PageHeader
         title="System Topology"
-        description="How common requests travel through the system. Pick a flow, then select a component."
-        actions={<DataSourceTag kind="example" />}
+        description="The running system, component by component. Select one to see how its status was observed."
+        actions={
+          updated && (
+            <Badge variant={live.stale ? "outline" : "success"} title="Status is polled every 5 s">
+              {live.stale ? "Stale" : "Live"} · {updated}
+            </Badge>
+          )
+        }
       />
 
-      <Card className="gap-0 py-0">
-        <Tabs<PresetId>
-          idPrefix="topology"
-          label="Flows"
-          value={preset.id}
-          onChange={setPresetId}
-          className="px-2 pt-1"
-          items={PRESETS.map((p) => ({ id: p.id, label: p.label }))}
-        />
-        <CardContent {...tabPanelProps("topology", preset.id)} className="space-y-4 p-4 outline-none">
-          <RequestFlowDiagram
-            key={preset.id}
-            model={preset.model}
-            mode={preset.mode}
-            playKey={preset.id}
-            showAsync={preset.showAsync}
-            componentInfo={COMPONENT_INFO}
-            label={`${preset.label} flow`}
-          />
-          {preset.id === "load-balancing" && <ReplicaDistribution sequence={LB_SEQUENCE} counts={{ "api-1": 4, "api-2": 4 }} />}
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <Disclosure title="Step by step" meta={`${preset.steps.length} steps`} className="min-w-0 flex-1">
-              <ol className="list-decimal space-y-1.5 pl-5 text-sm">
-                {preset.steps.map((step) => (
-                  <li key={step}>{step}</li>
-                ))}
-              </ol>
-            </Disclosure>
-            {preset.experiment && (
-              <Button variant="outline" size="sm" asChild>
-                <Link to={`/experiments?experiment=${preset.experiment}`}>
-                  <FlaskConical /> Try it in the Experiment Lab
-                </Link>
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+      {live.isLoading ? (
+        <LoadingRows rows={5} />
+      ) : disabled ? (
+        <Card>
+          <CardContent>
+            <EmptyState
+              icon={<Network className="size-5" />}
+              title="Live topology is disabled on this backend"
+              description="It is part of the development-only surface. Set ENABLE_DEV_ENDPOINTS=true and restart the stack."
+            />
+          </CardContent>
+        </Card>
+      ) : !live.snapshot ? (
+        <Card>
+          <CardContent>
+            <ErrorState error={live.error} onRetry={live.refetch} />
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          {(() => {
+            const v = verdict(live.components, live.stale);
+            return (
+              <StatusSummary
+                tone={v.tone}
+                title={v.title}
+                data-testid="topology-verdict"
+                actions={
+                  live.stale ? (
+                    <Button size="sm" variant="outline" onClick={live.refetch}>
+                      <RefreshCw /> Retry
+                    </Button>
+                  ) : undefined
+                }
+              >
+                {live.stale
+                  ? "The backend has not answered recently, so the last known statuses are shown as stale, not as current."
+                  : v.problems.length > 0
+                    ? v.problems.map((c) => `${c.name}: ${c.status.replace("_", " ")}`).join(" · ")
+                    : "Every status below was observed within the last few seconds."}
+              </StatusSummary>
+            );
+          })()}
 
-      <Disclosure variant="boxed" className="bg-card" title="All components" meta={`${COMPONENTS.length}`}>
-        <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3" aria-label="Components">
-          {COMPONENTS.map((c) => (
-            <li key={c.name} className={cn("flex items-center justify-between gap-2 rounded-md border px-3 py-2", c.status !== "default stack" && "border-dashed")}>
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-medium">{c.name}</span>
-                <span className="block text-xs text-muted-foreground">{c.role}</span>
-              </span>
-              <Badge variant={c.status === "default stack" ? "success" : c.status === "optional" ? "outline" : "muted"} className="text-[10px]">
-                {c.status}
-              </Badge>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-3 text-xs text-muted-foreground">From docker-compose.yml. “Default stack” is configuration, not a live health reading.</p>
+          <div className="grid grid-cols-1 items-start gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
+            <Card className="min-w-0">
+              <CardContent className="p-3 sm:p-4">
+                {wide ? (
+                  <TopologyDiagram components={live.components} selectedId={selectedId} onSelect={setSelectedId} />
+                ) : (
+                  <TopologyList components={live.components} selectedId={selectedId} onSelect={setSelectedId} />
+                )}
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Healthy = observed working just now · Stale = last report too old · Unknown = no evidence. Dashed lines are asynchronous.
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="min-w-0">
+              <CardContent className="p-4">
+                {selected ? (
+                  <ComponentDetails component={selected} onClose={() => setSelectedId(null)} />
+                ) : (
+                  <p className="text-sm text-muted-foreground">Select a component to see its evidence, metrics, recent errors and design decisions.</p>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </>
+      )}
+
+      <Disclosure variant="boxed" className="bg-card" title="How requests travel (illustrated flows)">
+        <RequestFlowPresets />
       </Disclosure>
     </div>
   );

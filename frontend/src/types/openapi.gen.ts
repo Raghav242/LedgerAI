@@ -314,6 +314,176 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/observability/topology": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Live health of every component, with its evidence */
+        get: operations["topology_api_v1_observability_topology_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/events/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Outbox, publisher and consumer aggregates */
+        get: operations["pipeline_summary_api_v1_observability_events_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Outbox events, newest first (keyset pagination) */
+        get: operations["list_events_api_v1_observability_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/events/{event_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One event: transfer -> outbox -> publisher -> consumers */
+        get: operations["event_lifecycle_api_v1_observability_events__event_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/transfers/{transfer_id}/lifecycle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The persisted asynchronous path of one money movement */
+        get: operations["transfer_lifecycle_api_v1_observability_transfers__transfer_id__lifecycle_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/observability/traces/{trace_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One distributed trace from the trace store, if any */
+        get: operations["get_trace_api_v1_observability_traces__trace_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The deployed model version, threshold and offline evaluation */
+        get: operations["model_info_api_v1_ai_model_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/results": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recent anomaly results, newest first */
+        get: operations["list_results_api_v1_ai_results_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/ai/results/{transfer_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The anomaly result of one transfer (404 until the worker has scored it) */
+        get: operations["get_result_api_v1_ai_results__transfer_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/performance/benchmarks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recorded Locust benchmark runs, newest first */
+        get: operations["list_benchmarks_api_v1_performance_benchmarks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -369,6 +539,68 @@ export interface components {
              */
             created_at: string;
         };
+        /** AnomalyResultRead */
+        AnomalyResultRead: {
+            /** Event Id */
+            event_id: string;
+            /** Transfer Id */
+            transfer_id: string;
+            /** Source Account Id */
+            source_account_id: string;
+            /** Model Version */
+            model_version: string;
+            /** Score */
+            score: number;
+            /** Threshold */
+            threshold: number;
+            /** Is Anomaly */
+            is_anomaly: boolean;
+            /** Features */
+            features: {
+                [key: string]: number;
+            };
+            /** Explanation */
+            explanation: string[];
+            /** Rule Flags */
+            rule_flags: string[];
+            /** Inference Ms */
+            inference_ms: number;
+            /** Delivery Attempt */
+            delivery_attempt: number;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /**
+             * Scored At
+             * Format: date-time
+             */
+            scored_at: string;
+        };
+        /** AnomalyScenarioParams */
+        AnomalyScenarioParams: {
+            /**
+             * Scenario
+             * @description 0 normal, 1 unusually large amount, 2 rapid burst, 3 new-account unusual activity.
+             * @default 0
+             */
+            scenario: number;
+        };
+        /** AnomalyScenarioRunCreate */
+        AnomalyScenarioRunCreate: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            experiment: "anomaly_scenario";
+            /**
+             * @default {
+             *       "scenario": 0
+             *     }
+             */
+            params: components["schemas"]["AnomalyScenarioParams"];
+        };
         /** BalanceMismatchRead */
         BalanceMismatchRead: {
             /**
@@ -380,6 +612,131 @@ export interface components {
             balance_minor: number;
             /** Ledger Balance Minor */
             ledger_balance_minor: number;
+        };
+        /** BenchmarkList */
+        BenchmarkList: {
+            /** Directory Found */
+            directory_found: boolean;
+            /** Runs */
+            runs: components["schemas"]["BenchmarkRun"][];
+        };
+        /** BenchmarkResult */
+        BenchmarkResult: {
+            /** Label */
+            label: string;
+            /** Replicas */
+            replicas: number;
+            /** Workload */
+            workload: string;
+            /** Users */
+            users: number;
+            /** Duration S */
+            duration_s: number;
+            /** Requests */
+            requests: number;
+            /** Rps */
+            rps: number;
+            /** P50 Ms */
+            p50_ms: number;
+            /** P95 Ms */
+            p95_ms: number;
+            /** P99 Ms */
+            p99_ms: number;
+            /** Error Pct */
+            error_pct: number;
+            /** Rejected 429 */
+            rejected_429: number;
+            /** Other Failures */
+            other_failures: number;
+            /** Pg Connections Max */
+            pg_connections_max?: number | null;
+            /** Pg Connections Mean */
+            pg_connections_mean?: number | null;
+            /**
+             * Cpu Percent
+             * @default {}
+             */
+            cpu_percent: {
+                [key: string]: number;
+            };
+            /** Transfer Rps */
+            transfer_rps?: number | null;
+            /** Transfers Admitted */
+            transfers_admitted?: number | null;
+            /**
+             * Notes
+             * @default []
+             */
+            notes: string[];
+        };
+        /** BenchmarkRun */
+        BenchmarkRun: {
+            /** Id */
+            id: string;
+            /** Started At */
+            started_at: string | null;
+            /** Meta */
+            meta: {
+                [key: string]: unknown;
+            };
+            /** Results */
+            results: components["schemas"]["BenchmarkResult"][];
+            /** Error */
+            error?: string | null;
+        };
+        /** ComponentHealth */
+        ComponentHealth: {
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "gateway" | "api" | "database" | "cache" | "worker" | "broker" | "telemetry";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "healthy" | "degraded" | "unhealthy" | "stale" | "unknown" | "not_configured";
+            /**
+             * Evidence
+             * @enum {string}
+             */
+            evidence: "probe" | "heartbeat" | "derived" | "request" | "none";
+            /** Source */
+            source: string;
+            /** Message */
+            message: string;
+            /** Observed At */
+            observed_at: string | null;
+            /** Age Seconds */
+            age_seconds: number | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Last Ok At */
+            last_ok_at?: string | null;
+            /** Last Error */
+            last_error?: string | null;
+            /** Last Error At */
+            last_error_at?: string | null;
+            /**
+             * Metrics
+             * @default []
+             */
+            metrics: components["schemas"]["ComponentMetric"][];
+        };
+        /** ComponentMetric */
+        ComponentMetric: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Value */
+            value: number | string | boolean | null;
+            /** Unit */
+            unit?: string | null;
         };
         /** ConcurrencyParams */
         ConcurrencyParams: {
@@ -418,6 +775,29 @@ export interface components {
              */
             params: components["schemas"]["ConcurrencyParams"];
         };
+        /** ConsumerStats */
+        ConsumerStats: {
+            /** Consumer */
+            consumer: string;
+            /** Component */
+            component: string;
+            /** Events Processed */
+            events_processed: number;
+            /** Last Processed At */
+            last_processed_at: string | null;
+            /** Effects After Redelivery */
+            effects_after_redelivery: number | null;
+            /** Since Start */
+            since_start: {
+                [key: string]: number;
+            } | null;
+            /** Queues */
+            queues: components["schemas"]["QueueDepth"][];
+            /** Reported At */
+            reported_at: string | null;
+            /** Report Stale */
+            report_stale: boolean | null;
+        };
         /**
          * Currency
          * @enum {string}
@@ -449,13 +829,91 @@ export interface components {
         ErrorResponse: {
             error: components["schemas"]["ErrorBody"];
         };
+        /** EventConsumption */
+        EventConsumption: {
+            /** Consumer */
+            consumer: string;
+            /**
+             * Processed At
+             * Format: date-time
+             */
+            processed_at: string;
+            /** Delivery Attempt */
+            delivery_attempt?: number | null;
+        };
+        /**
+         * EventLifecycle
+         * @description Persisted evidence for one money movement's asynchronous path.
+         */
+        EventLifecycle: {
+            /** Transfer Id */
+            transfer_id: string | null;
+            /** Transfer Kind */
+            transfer_kind: string | null;
+            /** Transfer Created At */
+            transfer_created_at: string | null;
+            event: components["schemas"]["EventSummary"] | null;
+            /** Expected Consumers */
+            expected_consumers: string[];
+            /** Stages */
+            stages: components["schemas"]["LifecycleStage"][];
+        };
+        /** EventPage */
+        EventPage: {
+            /** Items */
+            items: components["schemas"]["EventSummary"][];
+            /** Next Cursor */
+            next_cursor: string | null;
+        };
+        /** EventSummary */
+        EventSummary: {
+            /** Id */
+            id: string;
+            /** Event Type */
+            event_type: string;
+            /** Event Version */
+            event_version: number;
+            /** Aggregate Id */
+            aggregate_id: string;
+            /** Transfer Id */
+            transfer_id: string | null;
+            /** Amount Minor */
+            amount_minor: number | null;
+            /** Correlation Id */
+            correlation_id: string | null;
+            /** Trace Id */
+            trace_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "processing" | "published";
+            /** Attempts */
+            attempts: number;
+            /** Last Error */
+            last_error: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Available At
+             * Format: date-time
+             */
+            available_at: string;
+            /** Published At */
+            published_at: string | null;
+            /** Consumers */
+            consumers: components["schemas"]["EventConsumption"][];
+        };
         /** ExperimentDefinition */
         ExperimentDefinition: {
             /**
              * Id
              * @enum {string}
              */
-            id: "concurrency" | "idempotency" | "rate_limiting" | "load_balancing";
+            id: "concurrency" | "idempotency" | "rate_limiting" | "load_balancing" | "redis_outage" | "rabbitmq_outage" | "worker_crash" | "replica_failure" | "anomaly_scenario";
             /** Title */
             title: string;
             /** Summary */
@@ -469,9 +927,15 @@ export interface components {
             /**
              * Risk
              * @default safe_local
-             * @constant
+             * @enum {string}
              */
-            risk: "safe_local";
+            risk: "safe_local" | "infrastructure";
+            /**
+             * Runner
+             * @default api
+             * @enum {string}
+             */
+            runner: "api" | "ai" | "controller";
             /** Risk Note */
             risk_note: string;
             /** Available */
@@ -636,7 +1100,7 @@ export interface components {
              * Outcome
              * @enum {string}
              */
-            outcome: "committed" | "replayed" | "insufficient_funds" | "rate_limited" | "in_progress" | "conflict" | "key_reused" | "read_ok" | "rejected" | "server_error" | "transport_error";
+            outcome: "committed" | "replayed" | "insufficient_funds" | "rate_limited" | "limiter_unavailable" | "in_progress" | "conflict" | "key_reused" | "read_ok" | "rejected" | "server_error" | "transport_error";
             /** Replica */
             replica: string | null;
             /** Latency Ms */
@@ -660,7 +1124,7 @@ export interface components {
              * Experiment
              * @enum {string}
              */
-            experiment: "concurrency" | "idempotency" | "rate_limiting" | "load_balancing";
+            experiment: "concurrency" | "idempotency" | "rate_limiting" | "load_balancing" | "redis_outage" | "rabbitmq_outage" | "worker_crash" | "replica_failure" | "anomaly_scenario";
             /**
              * Status
              * @enum {string}
@@ -724,7 +1188,7 @@ export interface components {
              * Experiment
              * @enum {string}
              */
-            experiment: "concurrency" | "idempotency" | "rate_limiting" | "load_balancing";
+            experiment: "concurrency" | "idempotency" | "rate_limiting" | "load_balancing" | "redis_outage" | "rabbitmq_outage" | "worker_crash" | "replica_failure" | "anomaly_scenario";
             /**
              * Status
              * @enum {string}
@@ -783,6 +1247,24 @@ export interface components {
          * @enum {string}
          */
         LedgerEntryRole: "debit" | "credit";
+        /** LifecycleStage */
+        LifecycleStage: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "observed" | "pending" | "failed" | "not_applicable" | "unknown";
+            /** At */
+            at?: string | null;
+            /** Detail */
+            detail: string;
+            /** Duration Ms */
+            duration_ms?: number | null;
+        };
         /** LoadBalancingParams */
         LoadBalancingParams: {
             /**
@@ -812,6 +1294,63 @@ export interface components {
              *     }
              */
             params: components["schemas"]["LoadBalancingParams"];
+        };
+        /** ModelInfo */
+        ModelInfo: {
+            /** Available */
+            available: boolean;
+            /** Version */
+            version?: string | null;
+            /** Algorithm */
+            algorithm?: string | null;
+            /**
+             * Features
+             * @default []
+             */
+            features: string[];
+            /** Threshold */
+            threshold?: number | null;
+            /** Threshold Rule */
+            threshold_rule?: string | null;
+            /** Score Meaning */
+            score_meaning?: string | null;
+            /** Trained At */
+            trained_at?: string | null;
+            /**
+             * Environment
+             * @default {}
+             */
+            environment: {
+                [key: string]: unknown;
+            };
+            /**
+             * Dataset
+             * @default {}
+             */
+            dataset: {
+                [key: string]: unknown;
+            };
+            /**
+             * Reference
+             * @default {}
+             */
+            reference: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /**
+             * Evaluation
+             * @default {}
+             */
+            evaluation: {
+                [key: string]: unknown;
+            };
+            /**
+             * Limitations
+             * @default []
+             */
+            limitations: string[];
         };
         /** Page[AccountRead] */
         Page_AccountRead_: {
@@ -859,6 +1398,56 @@ export interface components {
             minimum: number;
             /** Maximum */
             maximum: number;
+        };
+        /** PipelineSummary */
+        PipelineSummary: {
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Outbox Pending */
+            outbox_pending: number;
+            /** Outbox Processing */
+            outbox_processing: number;
+            /** Outbox Published */
+            outbox_published: number;
+            /** Awaiting Retry */
+            awaiting_retry: number;
+            /** Republished Events */
+            republished_events: number;
+            /** Oldest Unpublished At */
+            oldest_unpublished_at: string | null;
+            /** Oldest Unpublished Age Seconds */
+            oldest_unpublished_age_seconds: number | null;
+            /** Published Last 5M */
+            published_last_5m: number;
+            /** Publish Lag Ms P50 */
+            publish_lag_ms_p50: number | null;
+            /** Publish Lag Ms P95 */
+            publish_lag_ms_p95: number | null;
+            /** Publisher Last Error */
+            publisher_last_error: string | null;
+            /** Publisher Last Error At */
+            publisher_last_error_at: string | null;
+            /** Consumers */
+            consumers: components["schemas"]["ConsumerStats"][];
+        };
+        /** QueueDepth */
+        QueueDepth: {
+            /** Queue */
+            queue: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "main" | "retry" | "dead_letter";
+            /** Ready */
+            ready: number;
+            /** Unacked */
+            unacked?: number | null;
+            /** Consumers */
+            consumers?: number | null;
         };
         /** RateLimitingParams */
         RateLimitingParams: {
@@ -943,6 +1532,69 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+        };
+        /** TopologySnapshot */
+        TopologySnapshot: {
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Observed By */
+            observed_by: string;
+            /** Tracing Enabled */
+            tracing_enabled: boolean;
+            /** Trace Viewer Configured */
+            trace_viewer_configured: boolean;
+            /** Components */
+            components: components["schemas"]["ComponentHealth"][];
+        };
+        /** TraceSpan */
+        TraceSpan: {
+            /** Span Id */
+            span_id: string;
+            /** Parent Id */
+            parent_id: string | null;
+            /** Name */
+            name: string;
+            /** Service */
+            service: string;
+            /** Instance */
+            instance: string | null;
+            /** Start Offset Ms */
+            start_offset_ms: number;
+            /** Duration Ms */
+            duration_ms: number;
+            /** Error */
+            error: boolean;
+            /** Attributes */
+            attributes: {
+                [key: string]: string | number | boolean;
+            };
+        };
+        /** TraceView */
+        TraceView: {
+            /** Trace Id */
+            trace_id: string;
+            /** Available */
+            available: boolean;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Spans
+             * @default []
+             */
+            spans: components["schemas"]["TraceSpan"][];
+            /**
+             * Services
+             * @default []
+             */
+            services: string[];
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
         };
         /** TransferCreate */
         TransferCreate: {
@@ -1631,7 +2283,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ConcurrencyRunCreate"] | components["schemas"]["IdempotencyRunCreate"] | components["schemas"]["RateLimitingRunCreate"] | components["schemas"]["LoadBalancingRunCreate"];
+                "application/json": components["schemas"]["ConcurrencyRunCreate"] | components["schemas"]["IdempotencyRunCreate"] | components["schemas"]["RateLimitingRunCreate"] | components["schemas"]["LoadBalancingRunCreate"] | components["schemas"]["AnomalyScenarioRunCreate"];
             };
         };
         responses: {
@@ -1744,6 +2396,305 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    topology_api_v1_observability_topology_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopologySnapshot"];
+                };
+            };
+        };
+    };
+    pipeline_summary_api_v1_observability_events_summary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PipelineSummary"];
+                };
+            };
+        };
+    };
+    list_events_api_v1_observability_events_get: {
+        parameters: {
+            query?: {
+                status?: "all" | "unpublished" | "published" | "retrying";
+                event_type?: ("transfer.completed" | "account.funded") | null;
+                correlation_id?: string | null;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventPage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    event_lifecycle_api_v1_observability_events__event_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                event_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventLifecycle"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    transfer_lifecycle_api_v1_observability_transfers__transfer_id__lifecycle_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transfer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventLifecycle"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_trace_api_v1_observability_traces__trace_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                trace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    model_info_api_v1_ai_model_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInfo"];
+                };
+            };
+        };
+    };
+    list_results_api_v1_ai_results_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                anomalies_only?: boolean;
+                account_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnomalyResultRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_result_api_v1_ai_results__transfer_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                transfer_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnomalyResultRead"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_benchmarks_api_v1_performance_benchmarks_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkList"];
                 };
             };
         };

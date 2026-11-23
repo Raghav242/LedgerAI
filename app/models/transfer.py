@@ -1,7 +1,16 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, String, func, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -18,6 +27,8 @@ class Transfer(Base):
 
     __tablename__ = "transfers"
     __table_args__ = (
+        # AI worker feature queries: an account's earlier transfers by time (migration 0006).
+        Index("ix_transfers_source_account_created_at", "source_account_id", "created_at"),
         CheckConstraint("amount_minor > 0", name="amount_positive"),
         CheckConstraint("source_account_id <> destination_account_id", name="distinct_accounts"),
         CheckConstraint("currency IN ('USD')", name="currency_supported"),

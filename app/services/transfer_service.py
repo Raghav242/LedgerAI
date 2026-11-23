@@ -14,6 +14,7 @@ from app.core.exceptions import (
     TransferNotFoundError,
 )
 from app.models import IdempotencyOutcome, IdempotencyRecord, LedgerEntry, Transfer, TransferKind
+from app.observability.tracing import tracer
 from app.repositories.idempotency_repository import IdempotencyRepository
 from app.repositories.ledger_repository import LedgerRepository
 from app.repositories.transfer_repository import TransferRepository
@@ -96,12 +97,24 @@ class TransferService:
         """
         fingerprint = request_fingerprint(CREATE_TRANSFER_OPERATION, command.canonical_payload())
 
-        with atomic(self._session, lock_timeout_ms=self._lock_timeout_ms):
-            record = self._claim(scope, idempotency_key, fingerprint)
+        with (
+            tracer.start_as_current_span("transfer.create") as span,
+            atomic(self._session, lock_timeout_ms=self._lock_timeout_ms),
+        ):
+            with tracer.start_as_current_span("idempotency.claim") as claim_span:
+                record = self._claim(scope, idempotency_key, fingerprint)
+                claim_span.set_attribute("ledgerflow.idempotency.new_claim", record is not None)
             if record is None:
                 result = self._replay(scope, idempotency_key, fingerprint)
             else:
-                result = self._execute(record, command, correlation_id)
+                with tracer.start_as_current_span("ledger.post"):
+                    result = self._execute(record, command, correlation_id)
+            span.set_attribute("ledgerflow.idempotency.replayed", result.replayed)
+            span.set_attribute("ledgerflow.transfer.outcome", str(result.outcome))
+            if result.transfer_id is not None:
+                span.set_attribute("ledgerflow.transfer.id", str(result.transfer_id))
+            if result.error_code:
+                span.set_attribute("ledgerflow.error_code", result.error_code)
 
         # Logged only after COMMIT: no I/O beyond the database while row locks are held.
         if result.replayed:

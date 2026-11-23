@@ -8,6 +8,7 @@ import { ReplicaDistribution } from "@/components/lab/flow/ReplicaDistribution";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import type { LabRun } from "@/types/api";
+import { FailureResultView, FailureVisual } from "./FailureViews";
 
 type Data = Record<string, unknown>;
 
@@ -32,6 +33,8 @@ export function ExperimentResultView({ run }: { run: LabRun }) {
       return <RateLimitView data={data} />;
     case "load_balancing":
       return <LoadBalancingView data={data} />;
+    default:
+      return <FailureResultView run={run} />;
   }
 }
 
@@ -328,5 +331,7 @@ export function ResultVisual({ run }: { run: LabRun }) {
           showSequence={false}
         />
       );
+    default:
+      return <FailureVisual run={run} />;
   }
 }

@@ -91,13 +91,27 @@ def test_catalog_lists_the_allow_listed_experiments(lab: tuple[TestClient, FastA
     response = client.get("/api/v1/lab/experiments")
     assert response.status_code == 200
     catalog = response.json()
-    assert [e["id"] for e in catalog] == [
+    api_runnable = [e for e in catalog if e["runner"] == "api"]
+    assert [e["id"] for e in api_runnable] == [
         "concurrency",
         "idempotency",
         "rate_limiting",
         "load_balancing",
     ]
-    assert all(e["risk"] == "safe_local" and e["params"] for e in catalog)
+    assert all(e["risk"] == "safe_local" and e["available"] and e["params"] for e in api_runnable)
+    # Failure experiments are described, but the API marks them unavailable...
+    infra = [e for e in catalog if e["runner"] == "controller"]
+    assert {e["id"] for e in infra} == {
+        "redis_outage",
+        "rabbitmq_outage",
+        "worker_crash",
+        "replica_failure",
+    }
+    assert all(e["risk"] == "infrastructure" and not e["available"] for e in infra)
+    # ...and refuses to start them.
+    for e in infra:
+        refused = client.post("/api/v1/lab/runs", json={"experiment": e["id"], "params": {}})
+        assert refused.status_code == 422
 
 
 def test_lab_does_not_exist_without_dev_endpoints(test_settings: Settings, engine: Engine) -> None:

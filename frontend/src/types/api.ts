@@ -42,6 +42,21 @@ export type LabEventPage = Schemas["LabEventPage"];
 export type LabRequestObservation = Schemas["LabRequestObservation"];
 export type RequestOutcome = LabRequestObservation["outcome"];
 
+// --- Observability (Phase 5C) ---
+export type TopologySnapshot = Schemas["TopologySnapshot"];
+export type ComponentHealth = Schemas["ComponentHealth"];
+export type ComponentStatus = ComponentHealth["status"];
+export type ComponentMetric = Schemas["ComponentMetric"];
+export type PipelineSummary = Schemas["PipelineSummary"];
+export type ConsumerStats = Schemas["ConsumerStats"];
+export type QueueDepth = Schemas["QueueDepth"];
+export type EventPage = Schemas["EventPage"];
+export type EventSummary = Schemas["EventSummary"];
+export type EventLifecycle = Schemas["EventLifecycle"];
+export type LifecycleStage = Schemas["LifecycleStage"];
+export type TraceView = Schemas["TraceView"];
+export type TraceSpan = Schemas["TraceSpan"];
+
 export interface Page<T> {
   items: T[];
   limit: number;

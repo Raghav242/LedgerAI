@@ -29,7 +29,7 @@ function trackConsole(page: Page) {
 }
 
 async function selectExperiment(page: Page, name: string, title: string): Promise<Locator> {
-  await page.getByRole("list", { name: "Experiments" }).getByRole("button", { name: new RegExp(name) }).click();
+  await page.getByRole("list", { name: "Experiments", exact: true }).getByRole("button", { name: new RegExp(name) }).click();
   return page.getByRole("form", { name: `${title} parameters` });
 }
 
@@ -63,7 +63,7 @@ test("run every experiment from the UI against the real stack", async ({ page })
 
   await page.goto("/experiments");
   await expect(page.getByRole("heading", { name: "Experiment Lab" })).toBeVisible();
-  await expect(page.getByRole("list", { name: "Experiments" }).getByRole("button")).toHaveCount(4);
+  await expect(page.getByRole("list", { name: "Experiments", exact: true }).getByRole("button")).toHaveCount(4);
   const form = await selectExperiment(page, "Concurrency", "Concurrent withdrawals");
   await expect(form.getByLabel("Amount", { exact: true })).toHaveValue("10.00");
   await shot(page, "lab-selection");
@@ -140,9 +140,10 @@ test("run every experiment from the UI against the real stack", async ({ page })
   await expect(page.getByTestId("run-panel")).toHaveAttribute("data-status", "passed");
   await expect(page.getByRole("list", { name: "Recent runs" }).getByRole("button")).not.toHaveCount(0);
 
-  // --- Topology: static flows, component details ----------------------------------------------
+  // --- Topology: illustrated flows (behind a disclosure, below the live view) ------------------
   await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: /System Topology/ }).click();
   await expect(page.getByRole("heading", { name: "System Topology" })).toBeVisible();
+  await page.getByRole("button", { name: /How requests travel/ }).click();
   await page.getByRole("tab", { name: "Rate-limit rejection" }).click();
   await expect(page.getByRole("figure", { name: "Rate-limit rejection flow" }).locator('[data-node="redis"]')).toHaveAttribute("data-state", "blocked");
   await page.getByRole("tab", { name: "Transfer" }).click();

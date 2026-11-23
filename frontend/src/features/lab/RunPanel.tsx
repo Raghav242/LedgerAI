@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Download } from "lucide-react";
 import { useMemo, useState } from "react";
 import { IdText, KeyValue } from "@/components/common/display";
 import { ErrorState, LoadingRows } from "@/components/common/states";
@@ -6,6 +6,7 @@ import { CompactMetric } from "@/components/common/StatusSummary";
 import { Tabs } from "@/components/common/Tabs";
 import { InvariantCheckList, InvariantSummary, type Invariant } from "@/components/lab/InvariantCheckList";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/misc";
 import { tabPanelProps } from "@/lib/a11y";
@@ -15,6 +16,7 @@ import { EXPERIMENT_COPY } from "./experimentIcons";
 import { GuidedExplanation } from "./GuidedExplanation";
 import { isActive, useLabRun, useRunEvents } from "./hooks";
 import { MetricsGrid } from "./MetricsGrid";
+import { buildReport, downloadReport } from "./report";
 import { ExperimentResultView, ResultVisual } from "./ResultViews";
 import { RunFlow } from "./RunFlowCard";
 import { RunStatusBadge } from "./RunStatusBadge";
@@ -26,6 +28,11 @@ const KEY_METRICS: Record<ExperimentId, string[]> = {
   idempotency: ["duplicates", "committed", "replays", "key_conflicts"],
   rate_limiting: ["burst", "allowed", "rejected", "probe_allowed"],
   load_balancing: ["total", "replicas", "spread", "p50"],
+  redis_outage: ["refused", "failure_latency", "recovery", "reads"],
+  rabbitmq_outage: ["committed", "waiting", "published_in", "consumed"],
+  worker_crash: ["crashes", "effects", "duplicates", "settled"],
+  replica_failure: ["during_ok", "transient", "rejoin", "transfers"],
+  anomaly_scenario: ["verdict", "score", "latency", "response"],
 };
 
 type TabId = "flow" | "checks" | "timeline" | "details";
@@ -98,6 +105,17 @@ export function RunPanel({ runId, experiments }: { runId: string; experiments: E
               {formatRelative(run.created_at)}
               {duration(run) && ` · ${duration(run)}`}
             </span>
+            {!active && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => downloadReport(buildReport(run, events, definition))}
+                aria-label="Export this run as JSON"
+              >
+                <Download /> JSON
+              </Button>
+            )}
           </div>
 
           {active && (

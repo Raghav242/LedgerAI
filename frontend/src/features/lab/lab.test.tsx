@@ -90,7 +90,7 @@ describe("experiment selection and configuration", () => {
     const { user } = setup();
     const safety = await screen.findByRole("button", { name: "Safe · local only" });
     await user.click(safety);
-    expect(screen.getByText(/Nothing here stops containers, injects failures or runs commands/)).toBeInTheDocument();
+    expect(screen.getByText(/the API cannot run them at all/)).toBeInTheDocument();
   });
 
   it("explains how to enable the lab when the backend does not expose it", async () => {

@@ -34,14 +34,32 @@ x-api: &api
     # Experiment Lab (only active with ENABLE_DEV_ENDPOINTS=true): the runner sends its
     # measured traffic through NGINX on the internal network, like any other client.
     LAB_TARGET_BASE_URL: ${LAB_TARGET_BASE_URL:-http://nginx:8080}
+    # Live topology (Phase 5C, read-only): probe the readiness of exactly the replicas
+    # NGINX routes to (api-1 .. api-N), and expect heartbeats from these workers.
+    OBSERVABILITY_UPSTREAM_COUNT: ${NGINX_UPSTREAMS:-2}
+    OBSERVABILITY_EXPECTED_WORKERS: '["outbox-publisher", "event-consumer", "anomaly-detector"]'
+    # Optional tracing: OTEL_ENABLED=true with `--profile observability` (Jaeger).
+    OTEL_ENABLED: ${OTEL_ENABLED:-false}
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+    JAEGER_QUERY_URL: http://jaeger:16686
   # Names of the stateful dependencies are pinned in /etc/hosts. When a container stops,
   # Docker DNS stops resolving its name and getaddrinfo() then takes ~7 s (the query is
   # forwarded to the host's resolvers) -- no socket timeout covers that. With fixed
   # addresses, "Redis is down" is a plain TCP connect failure bounded by the 250 ms
   # connect timeout, so financial writes fail closed fast instead of hanging.
+  # The same applies to the topology probe's targets: a stopped replica or Jaeger must
+  # cost one bounded connect timeout, not a 7 s DNS lookup.
   extra_hosts:
     - "redis:${BACKEND_NET:-172.28.0}.10"
     - "postgres:${BACKEND_NET:-172.28.0}.11"
+    - "jaeger:${BACKEND_NET:-172.28.0}.14"
+    - "api-1:${BACKEND_NET:-172.28.0}.21"
+    - "api-2:${BACKEND_NET:-172.28.0}.22"
+    - "api-3:${BACKEND_NET:-172.28.0}.23"
+    - "api-4:${BACKEND_NET:-172.28.0}.24"
+  # Performance Lab (read-only): the recorded benchmark results, served as they are on disk.
+  volumes:
+    - ./benchmarks/results:/app/benchmarks/results:ro
   # No `ports:` -- replicas are reachable only through NGINX on the internal network.
   expose:
     - "8000"
@@ -73,6 +91,7 @@ x-worker: &worker
     - "redis:${BACKEND_NET:-172.28.0}.10"
     - "postgres:${BACKEND_NET:-172.28.0}.11"
     - "rabbitmq:${BACKEND_NET:-172.28.0}.13"
+    - "jaeger:${BACKEND_NET:-172.28.0}.14"
   expose: []
   healthcheck:
     test:
@@ -227,6 +246,9 @@ services:
   outbox-publisher:
     <<: *worker
     command: ["python", "-m", "app.events.publisher"]
+    environment:
+      <<: *worker-env
+      REPLICA_ID: outbox-publisher   # names its heartbeat row (live topology)
 
   # Applies events exactly once (dedup by event id) despite at-least-once delivery.
   event-consumer:
@@ -234,9 +256,24 @@ services:
     command: ["python", "-m", "app.events.consumer"]
     environment:
       <<: *worker-env
+      REPLICA_ID: event-consumer
       # DEVELOPMENT-ONLY fault injection used by scripts/demo_worker_crash.py.
       CONSUMER_CRASH_BEFORE_COMMIT_EVENT: ${CONSUMER_CRASH_BEFORE_COMMIT_EVENT:-}
       CONSUMER_CRASH_AFTER_COMMIT_EVENT: ${CONSUMER_CRASH_AFTER_COMMIT_EVENT:-}
+
+  # Scores transfer.completed events with the Isolation Forest (app/ai). Its own image
+  # target adds scikit-learn; its own queue (ledgerflow.anomaly-detector) and receipts.
+  ai-worker:
+    <<: *worker
+    build:
+      context: .
+      target: ai
+    image: ledgerflow-ai:local
+    command: ["python", "-m", "app.ai.worker"]
+    environment:
+      <<: *worker-env
+      REPLICA_ID: ai-worker
+      CONSUMER_NAME: anomaly-detector
 
   nginx:
     image: nginx:1.28-alpine
@@ -264,11 +301,27 @@ services:
       timeout: 3s
       retries: 10
 
+  # Optional trace store (Phase 5C): docker compose --profile observability up -d, with
+  # OTEL_ENABLED=true for the API and workers. In-memory, bounded, loopback-only UI.
+  jaeger:
+    image: jaegertracing/jaeger:2.5.0
+    container_name: ledgerflow-jaeger
+    profiles: [observability]
+    restart: unless-stopped
+    environment:
+      JAEGER_LISTEN_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:${JAEGER_UI_PORT:-16686}:16686"
+    networks:
+      backend:
+        ipv4_address: ${BACKEND_NET:-172.28.0}.14
+
 networks:
   backend:
     ipam:
       config:
-        # Fixed addresses (.10 redis, .11 postgres, .12 nginx, .13 rabbitmq, .21-.24 api
+        # Fixed addresses (.10 redis, .11 postgres, .12 nginx, .13 rabbitmq, .14 jaeger,
+        # .21-.24 api
         # replicas) live in
         # the lower half; Docker hands out dynamic addresses (migrate, load generators, ...)
         # only from the upper half, so a reserved address is never taken while its owner

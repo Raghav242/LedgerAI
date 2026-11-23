@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.api.routes.ai import AnomalyResultNotFoundError
 from app.core.exceptions import (
     AccountNotFoundError,
     CommitOutcomeUnknownError,
@@ -24,6 +25,7 @@ from app.core.exceptions import (
     TransferNotFoundError,
 )
 from app.lab.errors import LabRunInProgressError, LabRunNotFoundError
+from app.observability.pipeline import EventNotFoundError, InvalidCursorError
 from app.schemas.common import ErrorBody, ErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,10 @@ DOMAIN_ERROR_STATUS: dict[type[DomainError], int] = {
     # Experiment Lab: one run at a time; unknown run id.
     LabRunInProgressError: status.HTTP_409_CONFLICT,
     LabRunNotFoundError: status.HTTP_404_NOT_FOUND,
+    # Observability (read-only): unknown event id.
+    EventNotFoundError: status.HTTP_404_NOT_FOUND,
+    InvalidCursorError: status.HTTP_422_UNPROCESSABLE_CONTENT,
+    AnomalyResultNotFoundError: status.HTTP_404_NOT_FOUND,
 }
 _STATUS_BY_CODE = {cls.code: code for cls, code in DOMAIN_ERROR_STATUS.items()}
 RETRYABLE_ERRORS = (

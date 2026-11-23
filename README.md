@@ -19,7 +19,11 @@ accounts, add simulated funds, send idempotent transfers and watch which replica
 what the rate limiter said, and how the double-entry ledger and reconciliation stay
 consistent. Its **Experiment Lab** runs bounded concurrency, idempotency, rate-limiting and
 load-balancing experiments against the real stack and shows the path every request took.
-All money is simulated virtual USD.
+Phase 5 adds a **live topology** whose every status carries its evidence, an **event
+pipeline** view, a **request lifecycle explorer** (with optional OpenTelemetry traces), a
+**failure lab** that really stops local services through a separate loopback-only
+controller, an **AI anomaly lab** (Isolation Forest, scored asynchronously) and a
+**performance lab** over recorded Locust benchmarks. All money is simulated virtual USD.
 
 ![LedgerFlow AI overview](docs/screenshots/overview.png)
 
@@ -40,6 +44,11 @@ All money is simulated virtual USD.
 - **Reliable events:** every committed transfer and funding writes a versioned event (`transfer.completed`, `account.funded`) into a transactional outbox in the same PostgreSQL transaction. A publisher delivers it to RabbitMQ with publisher confirms, and an idempotent consumer applies it exactly once despite at-least-once delivery, with bounded retries and a dead-letter queue. The API never depends on the broker.
 - **Distributed Systems Lab frontend:** React + TypeScript dashboard with a transaction playground (idempotency-key lifecycle, retry-with-same-key, replay, 429/503 handling), transaction history with ledger drill-down, and live reconciliation. See [Frontend](#frontend-distributed-systems-lab).
 - **Experiment Lab:** four allow-listed, bounded experiments (concurrent withdrawals, idempotent retries, distributed rate limiting, load balancing) run in the background from the browser, with live progress, metrics, invariant checks, a timeline and a **Request Flow Visualizer** showing which components each request passed through. See [Experiment Lab](#experiment-lab).
+- **Live observability (5C):** a topology of every component with its evidence (probe, heartbeat, derived, request) and freshness; stale reports are never shown as current. An event-pipeline page (outbox, publisher, RabbitMQ, consumers) and an eight-stage lifecycle explorer for any transfer. Optional OpenTelemetry tracing to Jaeger (Compose profile `observability`), propagated through the outbox row and AMQP headers. See [Phase 5C](docs/phase-5c-design.md).
+- **Failure & recovery lab (5D):** Redis outage, RabbitMQ outage, worker crash (deterministic hooks) and replica failure, run from the browser through `labctl`, a separate loopback-only, allow-listed, journaled controller. The API can never stop anything. See [Phase 5D](docs/phase-5d-design.md).
+- **AI anomaly detection (5E):** an `ai-worker` consumes `transfer.completed` events, computes features from the account's earlier transfers only, scores them with a versioned Isolation Forest trained on deterministic synthetic data, and stores exactly one result per event. Transfers never wait for it. Held-out evaluation and a rule baseline are reported honestly. See [Phase 5E](docs/phase-5e-design.md).
+- **Performance lab (5E):** the recorded Locust results for 1/2/4 replicas, charted and explained from the numbers only. New bounded runs go through the controller on an isolated benchmark database.
+- **Guided demo and reports (5F):** a seven-step walkthrough that shows the last *recorded* result of each scenario, and JSON export of any experiment run. See [Phase 5F](docs/phase-5f-design.md).
 - **Health checks:** `/health/live` (process only) and `/health/ready` (PostgreSQL + Redis).
 - **Consistent errors:** every error shares one JSON shape with a stable machine-readable code.
 - **Interactive API docs:** OpenAPI/Swagger UI at `/docs`.
@@ -55,7 +64,12 @@ client ─► NGINX ─┼─► api-2 ─┼────────┤
                           │ confirms
                           ▼
                      RabbitMQ ──► event-consumer ──► PostgreSQL (receipt + effect, one txn)
+                          ├─► ai-worker ──────► PostgreSQL (receipt + anomaly result, one txn)
                           └─► retry tiers / DLQ
+
+workers ──heartbeats──► PostgreSQL ◄──read-only probes── /api/v1/observability (live topology)
+optional: every process ──OTLP──► Jaeger (profile `observability`)
+host only: labctl (127.0.0.1:8090) ──allow-listed docker compose stop/start──► 4 services
 
 inside each replica:
 FastAPI routes ──► rate limit ──► Services ──► Repositories ──► PostgreSQL
@@ -79,6 +93,8 @@ FastAPI routes ──► rate limit ──► Services ──► Repositories �
 | Database | PostgreSQL 16, SQLAlchemy 2.x, psycopg 3, Alembic |
 | Scaling | NGINX 1.28, Redis 7.4 (redis-py), Docker Compose |
 | Events | RabbitMQ 4.1 (quorum queues), pika |
+| Observability | worker heartbeats in PostgreSQL, OpenTelemetry SDK, Jaeger 2.5 (optional) |
+| AI | scikit-learn 1.9 Isolation Forest (separate `ai` image target), numpy |
 | Config | pydantic-settings |
 | Tooling | pytest, httpx, Ruff, Locust |
 
@@ -153,9 +169,12 @@ simulated funds requires `ENABLE_DEV_ENDPOINTS=true` (the default in `.env.examp
 | Transaction Playground | live | create and fund accounts; transfers with a visible Idempotency-Key, outcome classification, same-key retry and replay, serving replica, rate-limit headers, attempt timeline |
 | Transaction History | live | filter by account/type, server-side pagination, detail drawer with the transfer's ledger entries |
 | Ledger & Reconciliation | live | double-entry explainer (labelled example), live reconciliation invariants, paged ledger postings |
-| Experiment Lab | live | run the four Phase 5B experiments; progress, metrics, invariants, request flow, timeline ([below](#experiment-lab)) |
-| System Topology | live (static) | architecture, component descriptions, highlighted request flows; no live health yet |
-| AI Anomaly Lab, Performance Lab | planned | roadmap pages, clearly marked; no fake controls |
+| Guided Demo | live | seven scenarios with safe defaults, expected behaviour and the last recorded result; never runs anything itself |
+| Experiment Lab | live | correctness experiments (API) and failure & recovery experiments (local controller); JSON export ([below](#experiment-lab)) |
+| System Topology | live | architecture graph with each component's observed status and evidence; details per node; illustrated flows |
+| Event Pipeline | live | outbox, publication, queues, consumers; follow one event end to end |
+| AI Anomaly Lab | live | four scenarios through the real transfer API; asynchronous model verdict, model card |
+| Performance Lab | live (recorded) | 1/2/4-replica throughput and latency from recorded Locust runs; new bounded runs via the controller |
 
 ```powershell
 npm run typecheck      # tsc, strict
@@ -190,10 +209,23 @@ the timeline, for details. UX notes: [docs/phase-5b-ux-redesign.md](docs/phase-5
 ![Rate-limiting experiment](docs/screenshots/lab-rate-limiting.png)
 
 Safety model: the lab exists only with `ENABLE_DEV_ENDPOINTS=true` (refused in production),
-runs only these four experiments with validated, bounded integer parameters, one run at a
-time (enforced by PostgreSQL), each with its own `lab-<run>-…` accounts and its own
-rate-limit bucket. It never stops containers, injects failures, runs commands or touches
-files. Outage demos remain CLI-only (see [Testing and demos](#testing-and-demos)).
+runs only allow-listed experiments with validated, bounded integer parameters, one run at
+a time (enforced by PostgreSQL), each with its own `lab-<run>-…` accounts and its own
+rate-limit bucket. The API itself never stops containers, injects failures or runs
+commands.
+
+**Failure & recovery experiments** (Redis outage, RabbitMQ outage, worker crash, replica
+failure) run only through the separate local controller:
+
+```powershell
+python -m labctl --enable-failures --enable-benchmarks   # 127.0.0.1:8090 only; Ctrl+C to stop
+```
+
+It binds loopback only, needs a per-start token that the Vite dev server injects (the
+browser never sees it), refuses foreign `Origin`/`Host`, can stop exactly four
+allow-listed services, journals each disturbance before it happens, always restores
+and verifies recovery, and reports `RECOVERY FAILED` explicitly if it cannot. The UI asks
+for confirmation first. Details: [docs/phase-5d-design.md](docs/phase-5d-design.md).
 
 The same **Request Flow Visualizer** shows the path of the latest transfer in the
 Transaction Playground and the common flows on the System Topology page. Paths are derived
@@ -205,6 +237,31 @@ from response metadata (status, error code, `X-Served-By`, `Idempotent-Replayed`
 > **Do not expose the frontend or the API publicly.** There is no authentication: every
 > caller acts as the demo merchant, and the funding endpoint mints simulated money. Both
 > servers bind to `127.0.0.1` by default.
+
+## Interview demo (15-20 minutes)
+
+```powershell
+docker compose up -d --build --wait                       # stack incl. ai-worker
+python -m labctl --enable-failures --enable-benchmarks    # optional: failure lab + new benchmarks
+cd frontend; npm run dev                                  # http://127.0.0.1:5173/demo
+```
+
+1. **Overview → Start guided demo.** One page per scenario, with its last recorded result.
+2. **Transfer** (Playground): send $25.50, open *Request path → Full lifecycle*. Point out
+   what was observed (headers, persisted rows) versus derived, and the async boundary.
+3. **Concurrency** and **idempotency** (Experiment Lab): 10 of 100 succeed; 1 execution, 19
+   replays. Talking points: lock order, claim-and-complete in one transaction.
+4. **Rate limiting**: about 20 admitted across two replicas; the Lua token bucket; fail-closed writes.
+5. **RabbitMQ outage**: transfers commit, events wait in the outbox, then exactly-once
+   delivery. Show *System Topology* turning RabbitMQ red, then green.
+6. **AI Lab**: "Unusually large" is flagged; "Rapid burst" is *not* flagged by the model
+   but is by the rule baseline. The model card explains why (bursts are single-feature
+   anomalies). Talking points: async inference, no future leakage, held-out evaluation.
+7. **Performance Lab**: 2.7-3.0x the throughput with 4 replicas, sub-linear on one machine,
+   with the CPU numbers that explain it.
+
+Deeper topics on request: heartbeats vs container state, trace context through the
+outbox, the controller's safety model, and the Isolation Forest's limits.
 
 ## API
 
@@ -230,6 +287,16 @@ from response metadata (status, error code, `X-Served-By`, `Idempotent-Replayed`
 | `POST` | `/api/v1/lab/runs` | Start an allow-listed experiment in the background (**development only**) |
 | `GET` | `/api/v1/lab/runs/{id}` | Run status, progress, metrics and invariant checks (**development only**) |
 | `GET` | `/api/v1/lab/runs/{id}/events` | Run timeline, incrementally (`after`, `limit`) (**development only**) |
+| `GET` | `/api/v1/observability/topology` | Live component health with evidence and freshness (**development only**) |
+| `GET` | `/api/v1/observability/events/summary` | Outbox, publisher and consumer aggregates (**development only**) |
+| `GET` | `/api/v1/observability/events` | Outbox events, newest first, keyset-paginated (`status`, `event_type`, `correlation_id`, `cursor`) (**development only**) |
+| `GET` | `/api/v1/observability/events/{id}` | One event's lifecycle (**development only**) |
+| `GET` | `/api/v1/observability/transfers/{id}/lifecycle` | A transfer's persisted asynchronous path (**development only**) |
+| `GET` | `/api/v1/observability/traces/{trace_id}` | One trace from Jaeger, when tracing is on (**development only**) |
+| `GET` | `/api/v1/ai/model` | Model card: version, threshold, held-out evaluation (**development only**) |
+| `GET` | `/api/v1/ai/results` | Recent anomaly results (**development only**) |
+| `GET` | `/api/v1/ai/results/{transfer_id}` | One transfer's result (404 until scored) (**development only**) |
+| `GET` | `/api/v1/performance/benchmarks` | Recorded benchmark runs (**development only**) |
 
 Amounts are integers in minor units, so `2550` means $25.50.
 
@@ -277,6 +344,12 @@ pytest -m redis           # real-Redis rate limiter tests (atomicity, shared quo
 pytest -m rabbitmq        # real-RabbitMQ delivery tests (dedup, crashes, retries, DLQ, outage)
 pytest -m stack           # end-to-end through NGINX across replicas (redeploys the stack)
 ruff check .; ruff format --check .
+python -m app.ai.train    # retrain the anomaly model (deterministic; reproduces the committed artifact)
+
+# Frontend browser tests that DISTURB the local stack are opt-in:
+cd frontend
+E2E_FAILURES=1 npx playwright test e2e/failure-lab.spec.ts      # needs: python -m labctl --enable-failures
+E2E_BENCHMARK=1 npx playwright test e2e/ai-performance.spec.ts  # needs: python -m labctl --enable-benchmarks
 ```
 
 - **Integration tests** run against a separate database (`ledgerflow_test`), created and
@@ -355,6 +428,12 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 | `CONSUMER_PREFETCH` | `10` | Max unacknowledged messages per consumer |
 | `CONSUMER_RETRY_DELAYS_MS` | `[1000, 5000, 25000]` | One retry tier per entry; after the last, the DLQ |
 | `CONSUMER_DELIVERY_LIMIT` | `5` | Broker dead-letters a message redelivered more often than this |
+| `OBSERVABILITY_UPSTREAM_COUNT` | `0` (stack: `NGINX_UPSTREAMS`) | Replicas the live topology probes (`api-1` … `api-N`); 0 = this process only |
+| `OBSERVABILITY_EXPECTED_WORKERS` | publisher, consumer (stack: + `anomaly-detector`) | Workers whose missing heartbeat is `unknown` rather than `not_configured` |
+| `HEARTBEAT_INTERVAL_SECONDS` | `5` | Worker self-report interval (stale after 3 intervals + announced back-off) |
+| `OTEL_ENABLED` | `false` | Export OpenTelemetry spans (use with `--profile observability`) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` / `JAEGER_QUERY_URL` | stack: `http://jaeger:4318` / `http://jaeger:16686` | Where spans go and where the UI reads traces back |
+| `BENCHMARK_RESULTS_DIR` | `benchmarks/results` | Recorded benchmark JSON read by the Performance Lab (mounted read-only in the stack) |
 
 ## Notes and limitations
 
@@ -370,6 +449,9 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 - **Events start with migration `0003`.** Transfers committed before it have no events. Published outbox rows and receipts are kept indefinitely (no retention job yet).
 - **Fixed container IPs are a local workaround.** They avoid two Docker Desktop DNS problems measured during development (slow lookups for stopped containers, stale upstream addresses after restarts). Production systems use dynamic addresses with service discovery and readiness-based load-balancer membership instead; see [the design notes](docs/phase-3-design.md#fixed-ips-are-a-local-workaround-not-a-production-pattern).
 - **Phase 1 data:** migration `0002` backfills existing transfers exactly. Balances from unrecorded Phase 1 funding become one labelled `legacy_opening_balance` entry per account, and the migration aborts if a balance cannot be explained.
+- **Observability is development-only and partly second-hand.** RabbitMQ health is derived from the workers (the API never connects to the broker); NGINX emits no spans; which replica served a historical transfer is not stored. See [the 5C limitations](docs/phase-5c-design.md#7-limitations).
+- **The AI model is trained and evaluated on synthetic data only** (compressed clock, source-account history only). It misses rapid bursts that the rule baseline catches, and its score is not a probability. See [the 5E limitations](docs/phase-5e-design.md#17-limitations).
+- **The experiment controller drives the local Compose stack only.** While a benchmark runs, the stack serves the separate benchmark database.
 - **Experiment Lab is development-only and single-run.** Runs execute inside the API replica that accepted them (sharing its CPU and pool), one at a time across the stack; the flow diagrams are derived from responses, not traced; `lab-…` accounts are never deleted. See [the design notes](docs/phase-5b-design.md#9-known-limitations).
 - **Frontend lists are bounded.** The account picker shows the newest 100 accounts (no search endpoint), and list endpoints return no total counts, so history uses previous/next pagination.
 - USD only.
@@ -379,7 +461,12 @@ Design notes: [transactions and data model](docs/phase-1-design.md),
 [concurrency, idempotency and the ledger](docs/phase-2-design.md) and
 [horizontal scaling and distributed rate limiting](docs/phase-3-design.md) and
 [transactional outbox and reliable events](docs/phase-4a-design.md) and
-[the frontend and transaction playground](docs/phase-5a-design.md), with diagrams
+[the frontend and transaction playground](docs/phase-5a-design.md) and
+[the Experiment Lab](docs/phase-5b-design.md) and
+[live observability](docs/phase-5c-design.md) and
+[the failure lab](docs/phase-5d-design.md) and
+[AI and performance](docs/phase-5e-design.md) and
+[final UX and the guided demo](docs/phase-5f-design.md), with diagrams
 and the trade-offs behind each decision.
 
 To change runtime dependencies, edit `pyproject.toml` and regenerate the image's pinned

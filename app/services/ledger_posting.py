@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import AccountNotFoundError
 from app.models import Account, Transfer, TransferKind, TransferStatus
+from app.observability.tracing import current_trace_parent, tracer
 from app.repositories.account_repository import AccountRepository
 from app.repositories.ledger_repository import LedgerRepository
 from app.repositories.outbox_repository import OutboxRepository, build_event
@@ -74,7 +75,12 @@ class LedgerPoster:
         #    publisher process delivers it after COMMIT.
         event = build_event(transfer, correlation_id=correlation_id)
         if event is not None:
-            self._outbox.add(event)
+            with tracer.start_as_current_span("outbox.write") as span:
+                span.set_attribute("ledgerflow.event.id", str(event.id))
+                span.set_attribute("ledgerflow.event.type", event.event_type)
+                # The publisher continues this trace after COMMIT (None if not tracing).
+                event.trace_parent = current_trace_parent()
+                self._outbox.add(event)
         return transfer
 
     @staticmethod

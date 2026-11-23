@@ -15,6 +15,8 @@ from app.core.database import create_db_engine, create_session_factory
 from app.core.logging import configure_logging
 from app.lab.runner import LabRunner
 from app.lab.signing import LabTrafficSigner
+from app.observability.topology import TopologyProbe
+from app.observability.tracing import configure_tracing, instrument_api
 from app.rate_limiting import (
     InMemoryFixedWindowLimiter,
     RateLimiter,
@@ -35,6 +37,7 @@ def create_app(
     """
     settings = settings or get_settings()
     configure_logging(settings.log_level)
+    tracing = configure_tracing(settings, service_name="ledgerflow-api")
     engine = create_db_engine(settings)
 
     redis_client: redis.Redis | None = None
@@ -75,6 +78,7 @@ def create_app(
         yield
         if lab_runner is not None:
             lab_runner.shutdown()
+        app.state.topology_probe.close()
         engine.dispose()
         if redis_client is not None:
             redis_client.close()
@@ -97,6 +101,12 @@ def create_app(
         )
         app.state.lab_signer = signer
     app.state.lab_runner = lab_runner
+    app.state.topology_probe = TopologyProbe(
+        settings=settings,
+        session_factory=app.state.session_factory,
+        redis_client=redis_client,
+        tracing_enabled=tracing,
+    )
 
     app.add_middleware(
         ResponseHeadersMiddleware,
@@ -107,4 +117,7 @@ def create_app(
     app.include_router(
         build_api_router(include_dev_endpoints=settings.enable_dev_endpoints), prefix="/api/v1"
     )
+    if tracing:
+        # Last, so the tracing middleware wraps everything (including the headers middleware).
+        instrument_api(app, engine, redis_client)
     return app

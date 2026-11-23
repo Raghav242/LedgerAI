@@ -1,6 +1,7 @@
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from app.api.rate_limit import DECISION_STATE_KEY, rate_limit_headers
+from app.observability.tracing import current_trace_id
 
 
 class ResponseHeadersMiddleware:
@@ -10,6 +11,8 @@ class ResponseHeadersMiddleware:
       (Done here rather than in the dependency because some routes return a Response
       object directly, which bypasses headers set on FastAPI's injected Response.)
     - X-Served-By with the replica id, when enabled (development aid).
+    - X-Trace-Id with the OpenTelemetry trace id, when tracing is on (the server span is
+      active while the response starts, because the tracing middleware wraps this one).
 
     Pure ASGI middleware: it only edits the response-start message, never the body.
     """
@@ -33,6 +36,9 @@ class ResponseHeadersMiddleware:
                     extra.update(rate_limit_headers(decision))
                 if self._replica_id is not None:
                     extra["X-Served-By"] = self._replica_id
+                trace_id = current_trace_id()
+                if trace_id is not None:
+                    extra["X-Trace-Id"] = trace_id
                 for name, value in extra.items():
                     if name.lower().encode() not in present:
                         headers.append((name.lower().encode(), value.encode()))

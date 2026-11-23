@@ -11,7 +11,22 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-ExperimentId = Literal["concurrency", "idempotency", "rate_limiting", "load_balancing"]
+ExperimentId = Literal[
+    "concurrency",
+    "idempotency",
+    "rate_limiting",
+    "load_balancing",
+    # Phase 5D: controlled failures. Runnable ONLY by the local experiment controller
+    # (labctl); the API's run-creation schema below does not accept them.
+    "redis_outage",
+    "rabbitmq_outage",
+    "worker_crash",
+    "replica_failure",
+    # Phase 5E: AI Lab scenarios (traffic only; started from the AI Lab page).
+    "anomaly_scenario",
+]
+# Experiments the API itself may start (no infrastructure control).
+API_EXPERIMENTS = ("concurrency", "idempotency", "rate_limiting", "load_balancing")
 RunStatus = Literal["queued", "running", "passed", "failed", "error"]
 CheckStatus = Literal["pass", "fail", "skipped"]
 EventKind = Literal["phase", "request", "check", "note"]
@@ -22,6 +37,7 @@ RequestOutcome = Literal[
     "replayed",  # 201 + Idempotent-Replayed: the stored outcome, no new effect
     "insufficient_funds",  # 409, final business rejection after locking the rows
     "rate_limited",  # 429 from the token bucket; nothing executed
+    "limiter_unavailable",  # 503 RATE_LIMITER_UNAVAILABLE: Redis down, write failed closed
     "in_progress",  # 409 IDEMPOTENCY_REQUEST_IN_PROGRESS; same key still running
     "conflict",  # 503 CONCURRENCY_CONFLICT; lock wait timed out, rolled back
     "key_reused",  # 422 IDEMPOTENCY_KEY_REUSED; same key, different body
@@ -113,11 +129,65 @@ class LoadBalancingParams(_Params):
     )
 
 
+# --- Phase 5D failure experiments (local controller only) -------------------------------
+
+
+class RedisOutageParams(_Params):
+    probe_writes: int = _int(
+        3, 1, 5, "Writes during the outage", "Transfers attempted while Redis is down.", "requests"
+    )
+    outage_seconds: int = _int(
+        3, 1, 15, "Outage length", "How long Redis stays stopped (at least the probes).", "seconds"
+    )
+
+
+class RabbitMqOutageParams(_Params):
+    transfers: int = _int(
+        3, 1, 10, "Transfers during the outage", "Committed while RabbitMQ is down.", "requests"
+    )
+    outage_seconds: int = _int(
+        5, 2, 20, "Outage length", "How long RabbitMQ stays stopped.", "seconds"
+    )
+
+
+class WorkerCrashParams(_Params):
+    amount_minor: int = _int(
+        100, 1, 10_000, "Transfer amount", "One transfer per crash scenario, in cents.", "cents"
+    )
+
+
+class ReplicaFailureParams(_Params):
+    requests_per_phase: int = _int(
+        12,
+        4,
+        40,
+        "Reads per phase",
+        "Sequential reads before, during and after the replica is stopped.",
+        "requests",
+    )
+
+
+class AnomalyScenarioParams(_Params):
+    scenario: int = _int(
+        0,
+        0,
+        3,
+        "Scenario",
+        "0 normal, 1 unusually large amount, 2 rapid burst, 3 new-account unusual activity.",
+        "requests",
+    )
+
+
 PARAMS_BY_EXPERIMENT: dict[str, type[_Params]] = {
     "concurrency": ConcurrencyParams,
     "idempotency": IdempotencyParams,
     "rate_limiting": RateLimitingParams,
     "load_balancing": LoadBalancingParams,
+    "redis_outage": RedisOutageParams,
+    "rabbitmq_outage": RabbitMqOutageParams,
+    "worker_crash": WorkerCrashParams,
+    "replica_failure": ReplicaFailureParams,
+    "anomaly_scenario": AnomalyScenarioParams,
 }
 
 
@@ -148,8 +218,17 @@ class LoadBalancingRunCreate(_RunCreate):
     params: LoadBalancingParams = LoadBalancingParams()
 
 
+class AnomalyScenarioRunCreate(_RunCreate):
+    experiment: Literal["anomaly_scenario"]
+    params: AnomalyScenarioParams = AnomalyScenarioParams()
+
+
 LabRunCreate = Annotated[
-    ConcurrencyRunCreate | IdempotencyRunCreate | RateLimitingRunCreate | LoadBalancingRunCreate,
+    ConcurrencyRunCreate
+    | IdempotencyRunCreate
+    | RateLimitingRunCreate
+    | LoadBalancingRunCreate
+    | AnomalyScenarioRunCreate,
     Field(discriminator="experiment"),
 ]
 
@@ -174,7 +253,11 @@ class ExperimentDefinition(BaseModel):
     concept: str
     expected: list[str]
     how_it_works: list[str]
-    risk: Literal["safe_local"] = "safe_local"
+    # safe_local: bounded traffic only. infrastructure: stops/restarts an allow-listed
+    # local service, so it runs only through the local experiment controller.
+    risk: Literal["safe_local", "infrastructure"] = "safe_local"
+    # api: Experiment Lab; ai: AI Lab page (also started by the API); controller: labctl only.
+    runner: Literal["api", "ai", "controller"] = "api"
     risk_note: str
     available: bool
     unavailable_reason: str | None = None

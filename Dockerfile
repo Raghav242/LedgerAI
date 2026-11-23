@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1
-# LedgerFlow AI API image. One image serves every replica and the one-shot migrate job.
-FROM python:3.13-slim
+# LedgerFlow AI images. Two targets from one Dockerfile:
+#   api (default, last stage): every API replica, the event workers and the migrate job
+#   ai:                        the AI anomaly worker (adds scikit-learn; the API never needs it)
+
+FROM python:3.13-slim AS deps
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -17,6 +20,20 @@ RUN groupadd --system app && useradd --system --gid app --home-dir /app --no-cre
 COPY requirements.lock ./
 RUN pip install --root-user-action=ignore -r requirements.lock
 
+
+# --- AI worker -------------------------------------------------------------------------------
+FROM deps AS ai
+COPY requirements-ai.lock ./
+RUN pip install --root-user-action=ignore -r requirements-ai.lock
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY app ./app
+USER app
+CMD ["python", "-m", "app.ai.worker"]
+
+
+# --- API (default target) -------------------------------------------------------------------
+FROM deps AS api
 COPY alembic.ini ./
 COPY alembic ./alembic
 COPY app ./app

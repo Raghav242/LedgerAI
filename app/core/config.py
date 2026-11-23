@@ -116,6 +116,27 @@ class Settings(BaseSettings):
     # unset, a key is derived from POSTGRES_PASSWORD, which every replica already shares.
     lab_traffic_secret: SecretStr | None = None
 
+    # --- Observability (Phase 5C) ------------------------------------------------------
+    # Live topology: how many replicas NGINX routes to (api-1 .. api-N, matching
+    # NGINX_UPSTREAMS). 0 = a single locally run process that only reports on itself.
+    # Replica names are generated from this count, never taken from a request.
+    observability_upstream_count: int = Field(default=0, ge=0, le=4)
+    observability_replica_port: int = Field(default=8000, ge=1, le=65535)
+    # Worker components expected to send heartbeats; others are "not configured".
+    observability_expected_workers: list[str] = Field(
+        default=["outbox-publisher", "event-consumer"], max_length=10
+    )
+    heartbeat_interval_seconds: float = Field(default=5, gt=0, le=60)
+    # Performance Lab: where the benchmark harness writes its results (read-only here).
+    benchmark_results_dir: str = "benchmarks/results"
+    # Optional OpenTelemetry tracing (exported over OTLP/HTTP, e.g. to Jaeger).
+    otel_enabled: bool = False
+    otel_exporter_otlp_endpoint: str = Field(
+        default="http://127.0.0.1:4318", pattern=r"^https?://[A-Za-z0-9.\-]+(:\d+)?/?$"
+    )
+    # Jaeger query API used to show a trace in the UI (read-only). Unset = no trace view.
+    jaeger_query_url: str | None = Field(default=None, pattern=r"^https?://[A-Za-z0-9.\-]+(:\d+)?$")
+
     @model_validator(mode="after")
     def _forbid_unsafe_production_settings(self) -> "Settings":
         if self.app_env == "production" and self.enable_dev_endpoints:
@@ -145,6 +166,11 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> URL:
         return self.build_database_url(self.postgres_db)
+
+    @property
+    def trace_store_url(self) -> str | None:
+        """Where traces can be read back from; only meaningful while tracing is on."""
+        return self.jaeger_query_url if self.otel_enabled else None
 
 
 @lru_cache

@@ -48,9 +48,27 @@ def test_transfers_through_nginx_are_delivered_once_each(stack: Stack, fresh_quo
             {"ids": event_ids},
         ).all()
         receipts = conn.execute(
-            text("SELECT count(*) FROM processed_events WHERE event_id = ANY(:ids)"),
+            text(
+                "SELECT count(*) FROM processed_events "
+                "WHERE event_id = ANY(:ids) AND consumer_name = 'ledger-audit'"
+            ),
             {"ids": event_ids},
         ).scalar_one()
+
+    # The AI worker is a second, independent consumer: one receipt and one result per event.
+    def ai_scored() -> tuple[int, int]:
+        with stack.db.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT (SELECT count(*) FROM processed_events WHERE event_id = ANY(:ids) "
+                    "        AND consumer_name = 'anomaly-detector'), "
+                    "(SELECT count(*) FROM anomaly_results WHERE event_id = ANY(:ids))"
+                ),
+                {"ids": event_ids},
+            ).one()
+            return row[0], row[1]
+
+    wait_until(lambda: ai_scored() == (5, 5), timeout=60, interval=0.2, what="5 AI results")
     assert len(outbox) == 5  # replays added no events
     assert {status for status, _ in outbox} == {"published"}
     assert all(correlation for _, correlation in outbox)  # NGINX request ids carried along

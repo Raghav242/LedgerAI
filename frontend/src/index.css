@@ -29,6 +29,7 @@
   --sidebar: oklch(0.975 0 0);
   --chart-1: #1f8f6e; /* validated vs light surface (dataviz validator) */
   --chart-2: oklch(0.6 0.12 240);
+  --chart-3: #6f57c9; /* validated vs light surface and --chart-1 (dataviz validator) */
 }
 
 .dark {
@@ -56,6 +57,7 @@
   --sidebar: oklch(0.17 0.004 285.8);
   --chart-1: #22a37c; /* validated vs dark surface */
   --chart-2: oklch(0.7 0.12 240);
+  --chart-3: #9479e0; /* validated vs dark surface and --chart-1 */
 }
 
 @theme inline {
@@ -89,6 +91,7 @@
   --color-sidebar: var(--sidebar);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
 }
 
 @layer base {

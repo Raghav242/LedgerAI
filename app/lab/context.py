@@ -67,6 +67,11 @@ class ExperimentContext:
         self._transport_factory = transport_factory
 
     @property
+    def session_factory(self) -> sessionmaker[Session]:
+        """For read-only verification queries of an experiment's own outcome."""
+        return self._session_factory
+
+    @property
     def short_id(self) -> str:
         return self.run_id.hex[:8]
 

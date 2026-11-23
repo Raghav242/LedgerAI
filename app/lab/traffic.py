@@ -19,7 +19,14 @@ RETRYABLE_CODES = frozenset(
     {"CONCURRENCY_CONFLICT", "IDEMPOTENCY_REQUEST_IN_PROGRESS", "OUTCOME_UNKNOWN", "RATE_LIMITED"}
 )
 RETRYABLE_OUTCOMES = frozenset(
-    {"rate_limited", "in_progress", "conflict", "server_error", "transport_error"}
+    {
+        "rate_limited",
+        "limiter_unavailable",
+        "in_progress",
+        "conflict",
+        "server_error",
+        "transport_error",
+    }
 )
 TRANSFERS_PATH = "/api/v1/transfers"
 
@@ -55,6 +62,7 @@ def classify(status: int | None, code: str | None, replayed: bool, method: str) 
         "IDEMPOTENCY_REQUEST_IN_PROGRESS": "in_progress",
         "CONCURRENCY_CONFLICT": "conflict",
         "IDEMPOTENCY_KEY_REUSED": "key_reused",
+        "RATE_LIMITER_UNAVAILABLE": "limiter_unavailable",
     }
     if code in by_code:
         return by_code[code]

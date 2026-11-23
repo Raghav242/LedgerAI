@@ -125,7 +125,8 @@ def reset_database(engine: Engine) -> None:
         conn.execute(
             text(
                 "TRUNCATE TABLE idempotency_records, ledger_entries, transfers, "
-                "outbox_events, processed_events, event_audit_log, lab_run_events, lab_runs"
+                "outbox_events, processed_events, event_audit_log, lab_run_events, lab_runs, "
+                "worker_heartbeats, anomaly_results"
             )
         )
         conn.execute(text("DELETE FROM accounts WHERE kind <> 'system'"))

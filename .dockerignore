@@ -21,3 +21,7 @@ deploy
 
 # Frontend (built separately; never part of the API image)
 frontend
+
+# The local experiment controller and its state never enter any image
+labctl
+.ledgerflow

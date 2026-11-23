@@ -10,12 +10,17 @@ import { describeError } from "@/lib/errors";
 import type { ExperimentId } from "@/types/api";
 import { ExperimentCard } from "./ExperimentCard";
 import { ExperimentDetail } from "./ExperimentDetail";
-import { isActive, useExperiments, useLabRuns, useStartRun } from "./hooks";
+import { controllerAvailability, isActive, useControllerStatus, useExperiments, useLabRuns, useStartControllerRun, useStartRun } from "./hooks";
 import { RecentRuns } from "./RecentRuns";
 import { RunPanel } from "./RunPanel";
 
 const SAFETY =
-  "Only these four experiments can run, with bounded parameters and one run at a time. Each run uses its own new lab accounts with simulated money and its own rate-limit bucket. Nothing here stops containers, injects failures or runs commands.";
+  "Correctness experiments run in the API with bounded parameters, one run at a time, on their own new lab accounts with simulated money and their own rate-limit bucket. Failure experiments are different: the API cannot run them at all. Only a separate local controller (python -m labctl --enable-failures, 127.0.0.1 only) can, and it can stop and restart exactly four allow-listed local services, after an explicit confirmation, restoring them automatically.";
+
+const GROUPS = [
+  { runner: "api", title: "Correctness under load", hint: "Bounded traffic through NGINX; nothing is stopped." },
+  { runner: "controller", title: "Failure & recovery", hint: "Stops one local service, then restores it. Needs the local controller." },
+] as const;
 
 /**
  * Experiment Lab: pick → configure → run → read the result → explore.
@@ -26,6 +31,7 @@ export function ExperimentLabPage() {
   const experiments = useExperiments();
   const runs = useLabRuns();
   const start = useStartRun();
+  const startFailure = useStartControllerRun();
   const [safetyOpen, setSafetyOpen] = useState(false);
 
   const list = experiments.data ?? [];
@@ -44,8 +50,12 @@ export function ExperimentLabPage() {
     });
   }
 
+  const infrastructure = selected?.runner === "controller";
+  const controller = useControllerStatus(infrastructure);
+  const availability = controllerAvailability(controller);
+  const starter = infrastructure ? startFailure : start;
   const labDisabled = isApiError(experiments.error) && experiments.error.status === 404;
-  const conflict = isApiError(start.error) && start.error.code === "LAB_RUN_IN_PROGRESS";
+  const conflict = isApiError(starter.error) && (starter.error.code === "LAB_RUN_IN_PROGRESS" || starter.error.status === 409);
 
   return (
     <div className="space-y-6">
@@ -90,20 +100,33 @@ export function ExperimentLabPage() {
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" role="list" aria-label="Experiments">
-            {list.map((experiment) => (
-              <div role="listitem" key={experiment.id}>
-                <ExperimentCard
-                  experiment={experiment}
-                  selected={experiment.id === selected?.id}
-                  onSelect={() => {
-                    start.reset();
-                    update({ experiment: experiment.id });
-                  }}
-                />
-              </div>
-            ))}
-          </div>
+          {GROUPS.map((group) => {
+            const items = list.filter((e) => (e.runner ?? "api") === group.runner);
+            if (!items.length) return null;
+            return (
+              <section key={group.runner} aria-label={group.title} className="space-y-2">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  <h2 className="text-sm font-semibold">{group.title}</h2>
+                  <span className="text-xs text-muted-foreground">{group.hint}</span>
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" role="list" aria-label={group.runner === "api" ? "Experiments" : "Failure experiments"}>
+                  {items.map((experiment) => (
+                    <div role="listitem" key={experiment.id}>
+                      <ExperimentCard
+                        experiment={experiment}
+                        selected={experiment.id === selected?.id}
+                        onSelect={() => {
+                          start.reset();
+                          startFailure.reset();
+                          update({ experiment: experiment.id });
+                        }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
 
           {/* DOM order is config → result → history, so on narrow screens the result comes
               before the history; on wide screens history sits under the config. */}
@@ -113,19 +136,20 @@ export function ExperimentLabPage() {
                 <ExperimentDetail
                   key={selected.id}
                   experiment={selected}
-                  starting={start.isPending}
+                  starting={starter.isPending}
+                  availability={infrastructure ? availability : undefined}
                   blockedReason={activeRun ? "Another run is in progress. Runs never overlap, so they cannot distort each other." : null}
                   onRun={(params) =>
-                    start.mutate({ experiment: selected.id, params }, { onSuccess: (run) => update({ run: run.id, experiment: run.experiment }) })
+                    starter.mutate({ experiment: selected.id, params }, { onSuccess: (run) => update({ run: run.id, experiment: run.experiment }) })
                   }
                 />
               )}
-              {start.error && (
+              {starter.error && (
                 <Alert variant={conflict ? "warning" : "destructive"}>
                   <FlaskConical />
-                  <AlertTitle>{conflict ? "Another run is in progress" : describeError(start.error).title}</AlertTitle>
+                  <AlertTitle>{conflict ? "Another run is in progress" : describeError(starter.error).title}</AlertTitle>
                   <AlertDescription>
-                    {describeError(start.error).message}
+                    {describeError(starter.error).message}
                     {conflict && activeRun && (
                       <button
                         type="button"

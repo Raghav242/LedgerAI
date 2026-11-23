@@ -24,6 +24,7 @@ function stubBackend() {
         generated_at: "2026-11-18T00:00:00Z",
       }),
     "GET /api/v1/ledger/entries": () => json({ items: [], limit: 20, offset: 0 }),
+    "GET /api/v1/performance/benchmarks": () => json({ directory_found: true, runs: [] }),
   });
 }
 
@@ -40,16 +41,13 @@ describe("application navigation", () => {
     expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
   });
 
-  it("marks future sections as planned, never as working features", () => {
+  it("marks no section as planned once every page is functional", () => {
     stubBackend();
     renderApp("/");
     const nav = screen.getByRole("navigation", { name: "Main" });
-    for (const label of ["AI Anomaly Lab", "Performance Lab"]) {
-      expect(within(within(nav).getByRole("link", { name: new RegExp(label) })).getByText("Planned")).toBeInTheDocument();
-    }
-    // Phase 5B made these two functional.
-    for (const label of ["Transaction Playground", "Experiment Lab", "System Topology"]) {
-      expect(within(within(nav).getByRole("link", { name: new RegExp(label) })).queryByText("Planned")).toBeNull();
+    expect(within(nav).queryByText("Planned")).toBeNull();
+    for (const label of ["Event Pipeline", "AI Anomaly Lab", "Performance Lab"]) {
+      expect(within(nav).getByRole("link", { name: new RegExp(label) })).toBeInTheDocument();
     }
   });
 
@@ -65,10 +63,11 @@ describe("application navigation", () => {
     expect(await screen.findByRole("heading", { name: "Ledger & Reconciliation" })).toBeInTheDocument();
 
     await user.click(within(nav).getByRole("link", { name: /Performance Lab/ }));
-    expect(await screen.findByRole("heading", { name: "Performance Lab" })).toBeInTheDocument();
-    expect(screen.getByText(/Planned for Phase 5D: not functional yet/)).toBeInTheDocument();
-    // No fake "Run" controls on planned pages.
-    expect(screen.queryByRole("button", { name: /run/i })).toBeNull();
+    // First visit compiles the lazy chart chunk; allow for it under parallel test workers.
+    expect(await screen.findByRole("heading", { name: "Performance Lab" }, { timeout: 15_000 })).toBeInTheDocument();
+    // Recorded data is labelled as such; with no results, nothing is charted or invented.
+    expect(screen.getByText("Recorded results, not live")).toBeInTheDocument();
+    expect(await screen.findByText("No benchmark results recorded yet")).toBeInTheDocument();
 
     await user.click(within(nav).getByRole("link", { name: /System Topology/ }));
     expect(await screen.findByRole("heading", { name: "System Topology" })).toBeInTheDocument();

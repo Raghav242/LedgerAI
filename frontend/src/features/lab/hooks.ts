@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef } from "react";
+import { controllerApi } from "@/api/controller";
 import { labApi } from "@/api/lab";
 import { queryKeys } from "@/api/queryKeys";
 import { invalidateAfterMoneyMovement } from "@/hooks/queries";
@@ -105,4 +106,42 @@ export function useStartRun() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.lab.runs });
     },
   });
+}
+
+// --- local experiment controller (Phase 5D failure experiments) ------------------------------
+
+export function useControllerStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: ["controller", "status"],
+    queryFn: ({ signal }) => controllerApi.status(signal),
+    enabled,
+    retry: false,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useStartControllerRun() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ experiment, params }: { experiment: ExperimentId; params: Record<string, number> }) => controllerApi.start(experiment, params),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.lab.runs }),
+  });
+}
+
+export interface Availability {
+  runnable: boolean;
+  reason: string | null;
+}
+
+/** Why a controller-only experiment can or cannot run right now (never guessed). */
+export function controllerAvailability(status: ReturnType<typeof useControllerStatus>): Availability {
+  if (status.isLoading) return { runnable: false, reason: "Checking for the local experiment controller…" };
+  if (status.error || !status.data)
+    return {
+      runnable: false,
+      reason: "The local experiment controller is not running. Start it on this machine: python -m labctl --enable-failures",
+    };
+  if (!status.data.failures_enabled)
+    return { runnable: false, reason: "The controller is running with failure experiments disabled. Restart it with --enable-failures." };
+  return { runnable: true, reason: null };
 }
