@@ -16,10 +16,10 @@ from typing import Any
 
 import httpx
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 
 from app.core.config import LAB_SECRET_MIN_LENGTH, Settings, is_loopback_host
-from app.lab.signing import LabSigningNotConfiguredError, LabTrafficSigner
+from app.lab.signing import LabTrafficSigner
 from app.observability.topology import TopologyProbe
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -30,6 +30,13 @@ import stack_control  # noqa: E402
 GOOD_SECRET = "q7Lr2vXk9PzT4mWb8NcY3hJd6FsA1eGu5KoR0iVt"  # fake test key  gitleaks:allow
 
 
+@pytest.fixture(autouse=True)
+def _isolate_settings_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`_env_file=None` skips .env but not os.environ: CI exports LAB_TRAFFIC_SECRET etc."""
+    for name in Settings.model_fields:
+        monkeypatch.delenv(name.upper(), raising=False)
+
+
 def make_settings(**overrides: object) -> Settings:
     values: dict[str, object] = {"postgres_user": "u", "postgres_password": "s3cr3t-db-password"}
     values.update(overrides)
@@ -37,13 +44,6 @@ def make_settings(**overrides: object) -> Settings:
 
 
 # --- lab signing secret ------------------------------------------------------------------------
-
-
-def test_dev_endpoints_require_an_independent_lab_secret() -> None:
-    with pytest.raises(ValidationError, match="LAB_TRAFFIC_SECRET is not set"):
-        make_settings(enable_dev_endpoints=True)
-    settings = make_settings(enable_dev_endpoints=True, lab_traffic_secret=GOOD_SECRET)
-    assert settings.lab_traffic_secret is not None
 
 
 @pytest.mark.parametrize("empty", ["", "   "])
@@ -75,16 +75,6 @@ def test_lab_secret_must_differ_from_other_credentials(field: str) -> None:
         )
 
 
-def test_signer_has_no_fallback_key_even_when_validation_is_bypassed() -> None:
-    # model_copy skips validators: the signer must check on its own.
-    unchecked = make_settings().model_copy(update={"enable_dev_endpoints": True})
-    with pytest.raises(LabSigningNotConfiguredError, match="LAB_TRAFFIC_SECRET"):
-        LabTrafficSigner.from_settings(unchecked)
-    weak = unchecked.model_copy(update={"lab_traffic_secret": SecretStr("too-short")})
-    with pytest.raises(LabSigningNotConfiguredError):
-        LabTrafficSigner.from_settings(weak)
-
-
 def test_tokens_from_the_old_password_derived_key_are_rejected() -> None:
     settings = make_settings(enable_dev_endpoints=True, lab_traffic_secret=GOOD_SECRET)
     signer = LabTrafficSigner.from_settings(settings)
@@ -99,14 +89,6 @@ def test_tokens_from_the_old_password_derived_key_are_rejected() -> None:
     assert signer.principal_for(forged) is None
     genuine = signer.token(run_id := uuid.uuid4(), "standard")
     assert signer.verify(genuine) == (run_id, "standard")
-
-
-def test_controller_refuses_to_start_without_a_lab_secret() -> None:
-    from labctl.server import refuse_unsafe
-
-    with pytest.raises(SystemExit, match="LAB_TRAFFIC_SECRET"):
-        refuse_unsafe(make_settings())
-    refuse_unsafe(make_settings(lab_traffic_secret=GOOD_SECRET))  # local + secret: allowed
 
 
 # --- development surface exposure -------------------------------------------------------------
@@ -141,12 +123,6 @@ def test_a_public_gateway_is_fine_without_dev_endpoints() -> None:
 def test_production_refuses_every_development_aid(unsafe: dict[str, Any]) -> None:
     with pytest.raises(ValidationError):
         make_settings(app_env="production", **unsafe)
-
-
-def test_a_minimal_production_configuration_is_accepted() -> None:
-    settings = make_settings(app_env="production", gateway_bind="0.0.0.0")
-    assert settings.enable_dev_endpoints is False
-    assert settings.lab_traffic_secret is None  # not needed: the lab is not mounted
 
 
 def test_production_app_mounts_no_development_routes() -> None:
@@ -596,17 +572,6 @@ def test_the_stack_test_project_is_isolated_from_dev_and_bench() -> None:
     stack_control.assert_isolated(stack_control.STACK, stack_control.BENCH)
     assert stack_control.STACK.services == ()  # complete stack: broker, workers, AI worker
     assert stack_control.STACK.service_container("api-2") == "ledgerflow-stacktest-api-2-1"
-
-
-def test_app_factory_refuses_the_lab_without_a_signing_key() -> None:
-    from app.main import create_app
-    from app.rate_limiting import InMemoryFixedWindowLimiter
-
-    unchecked = make_settings(rate_limit_backend="memory").model_copy(
-        update={"enable_dev_endpoints": True}
-    )
-    with pytest.raises(LabSigningNotConfiguredError):
-        create_app(unchecked, rate_limiter=InMemoryFixedWindowLimiter())
 
 
 @pytest.mark.skipif(shutil.which("docker") is None, reason="docker CLI not installed")

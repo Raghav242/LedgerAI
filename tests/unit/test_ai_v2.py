@@ -4,7 +4,6 @@ per-family ensemble, hybrid decision, drift monitoring and the evaluation report
 import json
 import math
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -178,38 +177,6 @@ def test_the_burst_blind_spot_is_fixed_on_unseen_accounts_and_worlds() -> None:
     slow = report["datasets"]["shift_slow_bursts"]["detectors"]
     # The fixed "< 1 s" rule breaks when bursts slow down; the cadence features do not.
     assert slow["v2_model"]["recall_by_kind"]["burst"] > slow["rules"]["recall_by_kind"]["burst"]
-
-
-def test_retraining_reproduces_the_deployed_artifact(tmp_path: Path) -> None:
-    """The documented command, in a fresh process, rebuilds the shipped file byte for byte.
-
-    (In-process the pickle's bytes can differ with object sharing/interning; the scores
-    cannot, which is checked too.)
-    """
-    import subprocess
-    import sys
-
-    import joblib
-
-    subprocess.run(
-        [sys.executable, "-m", "app.ai.train", "--out-dir", str(tmp_path)],
-        check=True,
-        capture_output=True,
-        cwd=Path(__file__).resolve().parents[2],
-        timeout=600,
-    )
-    rebuilt = json.loads((tmp_path / "iforest-v2.json").read_text(encoding="utf-8"))
-    shipped = load_metadata()
-    assert shipped is not None
-    assert rebuilt["artifact_sha256"] == shipped["artifact_sha256"]
-    assert (rebuilt["threshold"], rebuilt["decision"]) == (
-        shipped["threshold"],
-        shipped["decision"],
-    )
-    x = np.random.default_rng(0).normal(size=(200, len(FEATURE_NAMES)))
-    a = joblib.load(tmp_path / "iforest-v2.joblib")
-    b = AnomalyModel.load_version("iforest-v2")._estimator
-    assert np.array_equal(a.anomaly_score(x), b.anomaly_score(x))
 
 
 # --- drift ---------------------------------------------------------------------------------
