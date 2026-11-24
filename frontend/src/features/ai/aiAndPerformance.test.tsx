@@ -19,7 +19,9 @@ function scenarioRun(flagged: boolean, intentUnusual: boolean): LabRun {
     params: { scenario: 2 },
     finished_at: "2026-11-20T12:00:30Z",
     result: {
-      summary: flagged ? "The model flagged this transfer." : "The model did not flag this transfer (score 0.621 < threshold 0.622).",
+      summary: flagged
+        ? "The detector flagged this transfer (model score 0.7070 ≥ threshold 0.6220; rule baseline fired)."
+        : "The detector did not flag this transfer (model score 0.6210 < threshold 0.6220; rule baseline fired).",
       explanation: [],
       metrics: [],
       outcome_counts: { committed: 12 },
@@ -84,8 +86,26 @@ describe("AI Anomaly Lab", () => {
     expect(screen.queryByText("Typical range (5th–95th pct)")).toBeNull();
     await user.click(screen.getByRole("button", { name: /Model card/ }));
     const card = screen.getByTestId("model-card");
-    expect(within(card).getByText(modelInfo.evaluation.model.f1.toFixed(3))).toBeInTheDocument();
-    expect(within(card).getByText(/rule baseline scores higher/)).toBeInTheDocument();
+    // The held-out comparison shows the measured numbers from the evaluation report.
+    const held = modelInfo.report.datasets.held_out_accounts.detectors;
+    const burstRow = within(card).getByRole("row", { name: /Recall: burst/ });
+    expect(within(burstRow).getAllByRole("cell")[1]).toHaveTextContent(held.v1_model.recall_by_kind.burst.toFixed(3)); // v1: 0.000
+    expect(within(burstRow).getAllByRole("cell")[3]).toHaveTextContent(held.v2_model.recall_by_kind.burst.toFixed(3));
+    const f1Row = within(card).getByRole("row", { name: /^F1/ });
+    expect(within(f1Row).getAllByRole("cell")[4]).toHaveTextContent(held.v2_hybrid.f1.toFixed(3));
+    expect(within(card).getByText("model OR rules")).toBeInTheDocument();
+    await user.click(within(card).getByRole("button", { name: /Findings and limitations/ }));
+    expect(within(card).getByText(/v1 never flagged a burst/)).toBeInTheDocument();
+  });
+
+  it("shows the model's and the rules' verdicts separately, and when they disagree", async () => {
+    const { user } = setupAi(scenarioRun(true, true));
+    await user.click(await screen.findByRole("button", { name: /Run scenario/ }));
+    const verdict = within(await screen.findByTestId("ai-prediction")).getByTestId("ai-verdicts");
+    // score 0.707 >= 0.622 (model flags) and a rule fired: both flag, no disagreement.
+    expect(verdict).toHaveTextContent("Model: flag");
+    expect(verdict).toHaveTextContent("Rules: flag");
+    expect(within(verdict).queryByText("disagree")).toBeNull();
   });
 
   it("explains a missing model instead of pretending", async () => {
@@ -118,5 +138,26 @@ describe("Performance Lab", () => {
     expect(text).toContain("4 replicas gave 2.73x the throughput of one (68% of linear)");
     expect(text).toContain("scaling is sub-linear");
     expect(text).not.toMatch(/linear scaling achieved/i);
+  });
+});
+
+describe("Performance insights from the Phase 6C measured run", () => {
+  it("names the busiest component as the bottleneck and explains lock-bound contention", async () => {
+    const measured = (await import("@/test/benchmark-20261123-182416.json")).default;
+    const run = { id: "20261123-182416", started_at: null, error: null, ...measured } as unknown as BenchmarkRun;
+    const all = insights(run);
+    const main = all.filter((i) => !i.detail).map((i) => i.text);
+    // Mixed transfers at 4 replicas: PostgreSQL (121%) was busier than any API container.
+    expect(main.some((t) => t.startsWith("Mixed transfers:") && t.includes("the database is becoming the limit"))).toBe(true);
+    expect(main.some((t) => t.startsWith("Mixed transfers:") && t.includes("replicas' CPU"))).toBe(false);
+    // Read-heavy at 4 replicas: API containers were the busiest.
+    expect(main.some((t) => t.startsWith("Read-heavy:") && t.includes("replicas' CPU"))).toBe(true);
+    // Hot account: one explanation (row lock), no generic "sub-linear" duplicate, idle replicas noted.
+    const hot = main.filter((t) => t.startsWith("Hot account"));
+    expect(hot.some((t) => t.includes("same account row"))).toBe(true);
+    expect(hot.some((t) => t.includes("scaling is sub-linear"))).toBe(false);
+    expect(hot.some((t) => t.includes("wait for the row lock"))).toBe(true);
+    // Latency/connection/spread statements are secondary.
+    expect(all.filter((i) => i.detail).every((i) => /p95 latency|connections were open|run-to-run spread/.test(i.text))).toBe(true);
   });
 });

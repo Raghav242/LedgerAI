@@ -1,19 +1,50 @@
 {
  "available": true,
- "version": "iforest-v1",
- "algorithm": "scikit-learn IsolationForest (n_estimators=200, max_samples=256)",
+ "version": "iforest-v2",
+ "versions": [
+  "iforest-v1",
+  "iforest-v2"
+ ],
+ "algorithm": "one scikit-learn IsolationForest per feature family ['amount', 'velocity'] (n_estimators=200, max_samples=256); score = max over families of the training percentile",
  "features": [
   "log_amount",
   "amount_vs_baseline",
   "log_prior_transfers",
   "burst_60s",
   "log_secs_since_prev",
-  "log_account_age"
+  "log_account_age",
+  "gap_vs_typical",
+  "burst_10s",
+  "rate_vs_typical_60s"
  ],
- "threshold": 0.62187,
- "threshold_rule": "maximises F1 on the validation split",
- "score_meaning": "negated IsolationForest score_samples; higher = more unusual. Not a probability.",
- "trained_at": "2026-11-20T21:06:29+00:00",
+ "feature_schema_version": 2,
+ "families": {
+  "amount": [
+   "log_amount",
+   "amount_vs_baseline",
+   "log_prior_transfers",
+   "log_account_age"
+  ],
+  "velocity": [
+   "log_secs_since_prev",
+   "gap_vs_typical",
+   "burst_10s",
+   "rate_vs_typical_60s",
+   "log_prior_transfers"
+  ]
+ },
+ "decision": "hybrid",
+ "decision_rule": "hybrid = model score >= threshold OR any rule-baseline flag; adopted because its validation F1 (0.9854) beat the model alone (0.6026) by >= 0.01",
+ "threshold": 0.998415,
+ "model_threshold": 0.988591,
+ "threshold_rule": "maximises hybrid F1 on the validation split",
+ "validation": {
+  "model_f1": 0.6026,
+  "hybrid_f1": 0.9854
+ },
+ "expected_anomaly_rate": 0.0025,
+ "score_meaning": "0-1: the highest training percentile of this transfer's unusualness in any feature family (0.99 = more unusual than 99% of training transfers in at least one respect). Not a probability.",
+ "trained_at": "2026-11-23T22:51:26+00:00",
  "environment": {
   "python": "3.13.5",
   "scikit_learn": "1.9.1",
@@ -46,49 +77,193 @@
   "log_amount": {
    "p05": 2.4493,
    "median": 3.7575,
-   "p95": 5.2608
+   "p95": 5.2608,
+   "deciles": [
+    2.749832,
+    3.099191,
+    3.346389,
+    3.557916,
+    3.757472,
+    3.966511,
+    4.201404,
+    4.485034,
+    4.884921
+   ]
   },
   "amount_vs_baseline": {
    "p05": -0.5937,
-   "median": 0.0,
-   "p95": 0.6326
+   "median": 0,
+   "p95": 0.6326,
+   "deciles": [
+    -0.46199,
+    -0.300676,
+    -0.185573,
+    -0.087669,
+    0,
+    0.089669,
+    0.191161,
+    0.312292,
+    0.481681
+   ]
   },
   "log_prior_transfers": {
    "p05": 1.7918,
    "median": 3.989,
-   "p95": 5.3799
+   "p95": 5.3799,
+   "deciles": [
+    2.397895,
+    3.044522,
+    3.465736,
+    3.73767,
+    3.988984,
+    4.248495,
+    4.521789,
+    4.804021,
+    5.153292
+   ]
   },
   "burst_60s": {
-   "p05": 0.0,
-   "median": 4.0,
-   "p95": 11.0
+   "p05": 0,
+   "median": 4,
+   "p95": 11,
+   "deciles": [
+    1,
+    2,
+    3,
+    3,
+    4,
+    5,
+    6,
+    8,
+    10
+   ]
   },
   "log_secs_since_prev": {
    "p05": 0.9298,
    "median": 2.2714,
-   "p95": 4.0732
+   "p95": 4.0732,
+   "deciles": [
+    1.109552,
+    1.430311,
+    1.720979,
+    1.996196,
+    2.271404,
+    2.550148,
+    2.854634,
+    3.214305,
+    3.69883
+   ]
   },
   "log_account_age": {
    "p05": 4.8824,
    "median": 6.8237,
-   "p95": 7.4469
+   "p95": 7.4469,
+   "deciles": [
+    5.395111,
+    5.982342,
+    6.346652,
+    6.613281,
+    6.823734,
+    6.999156,
+    7.146012,
+    7.277223,
+    7.393563
+   ]
+  },
+  "gap_vs_typical": {
+   "p05": -1.4076,
+   "median": 0,
+   "p95": 1.3098,
+   "deciles": [
+    -1.069538,
+    -0.695608,
+    -0.437766,
+    -0.198046,
+    0,
+    0.19113,
+    0.424506,
+    0.690458,
+    1.04105
+   ]
+  },
+  "burst_10s": {
+   "p05": 0,
+   "median": 1,
+   "p95": 2,
+   "deciles": [
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    1,
+    1,
+    2
+   ]
+  },
+  "rate_vs_typical_60s": {
+   "p05": -1.1018,
+   "median": -0.247,
+   "p95": 0.1964,
+   "deciles": [
+    -0.820195,
+    -0.578494,
+    -0.442261,
+    -0.335059,
+    -0.247026,
+    -0.168413,
+    -0.088512,
+    0,
+    0.092674
+   ]
   }
  },
  "evaluation": {
   "split": "held-out test accounts (never seen in training or threshold selection)",
-  "model": {
-   "precision": 0.7662,
-   "recall": 0.6886,
-   "f1": 0.7253,
-   "false_positive_rate": 0.0033,
-   "tp": 272,
-   "fp": 83,
-   "fn": 123,
-   "tn": 24987,
+  "deployed": {
+   "precision": 0.9701,
+   "recall": 0.9848,
+   "f1": 0.9774,
+   "false_positive_rate": 0.0005,
+   "tp": 389,
+   "fp": 12,
+   "fn": 6,
+   "tn": 25058,
    "recall_by_kind": {
-    "large": 0.7784,
-    "burst": 0.0,
-    "new_account": 1.0
+    "large": 0.985,
+    "burst": 1,
+    "new_account": 0.9167
+   }
+  },
+  "model": {
+   "precision": 0.4975,
+   "recall": 0.7595,
+   "f1": 0.6012,
+   "false_positive_rate": 0.0121,
+   "tp": 300,
+   "fp": 303,
+   "fn": 95,
+   "tn": 24767,
+   "recall_by_kind": {
+    "large": 0.7156,
+    "burst": 1,
+    "new_account": 1
+   }
+  },
+  "hybrid": {
+   "precision": 0.9701,
+   "recall": 0.9848,
+   "f1": 0.9774,
+   "false_positive_rate": 0.0005,
+   "tp": 389,
+   "fp": 12,
+   "fn": 6,
+   "tn": 25058,
+   "recall_by_kind": {
+    "large": 0.985,
+    "burst": 1,
+    "new_account": 0.9167
    }
   },
   "rule_baseline": {
@@ -102,13 +277,13 @@
    "tn": 25059,
    "recall_by_kind": {
     "large": 0.985,
-    "burst": 1.0,
+    "burst": 1,
     "new_account": 0.8333
    }
   },
   "inference_latency_ms_single_row_cpu": {
-   "p50": 19.449,
-   "p95": 22.789,
+   "p50": 16.419,
+   "p95": 24.964,
    "samples": 300
   }
  },
@@ -117,6 +292,711 @@
   "Labels are the generator's intent; the model never sees them during training.",
   "Compressed clock: seconds stand in for hours or days so lab scenarios run live.",
   "Only the source account's own history is used (no counterparties, devices, geography).",
-  "The score is relative unusualness, not a probability."
- ]
+  "The score is relative unusualness, not a probability.",
+  "Velocity features need at least three earlier transfers to know an account's cadence; before that they are neutral."
+ ],
+ "report": {
+  "generated_at": "2026-11-23T22:53:21+00:00",
+  "environment": {
+   "python": "3.13.5",
+   "scikit_learn": "1.9.1",
+   "numpy": "2.5.5"
+  },
+  "models": {
+   "iforest-v1": {
+    "artifact_sha256": "39b32582021d22937cc0e53375145566bc52238e994b8f2b5e41f33a3ddaa95c",
+    "threshold": 0.62187,
+    "decision": "model",
+    "features": [
+     "log_amount",
+     "amount_vs_baseline",
+     "log_prior_transfers",
+     "burst_60s",
+     "log_secs_since_prev",
+     "log_account_age"
+    ]
+   },
+   "iforest-v2": {
+    "artifact_sha256": "b6a2b80529e339798916b2733ca7362d889f7d0bc219c6754075e4dce371f3bf",
+    "threshold": 0.998415,
+    "decision": "hybrid",
+    "features": [
+     "log_amount",
+     "amount_vs_baseline",
+     "log_prior_transfers",
+     "burst_60s",
+     "log_secs_since_prev",
+     "log_account_age",
+     "gap_vs_typical",
+     "burst_10s",
+     "rate_vs_typical_60s"
+    ]
+   }
+  },
+  "detectors": {
+   "v1_model": "iforest-v1 alone (Phase 5E baseline)",
+   "rules": "rule baseline (amount >= 8x usual, < 1 s after previous, big first transfer)",
+   "v2_model": "iforest-v2 alone (per-family forests + velocity features)",
+   "v2_hybrid": "iforest-v2 as deployed (hybrid)"
+  },
+  "datasets": {
+   "held_out_accounts": {
+    "rows": 25465,
+    "anomalies": {
+     "large": 334,
+     "burst": 49,
+     "new_account": 12
+    },
+    "detectors": {
+     "v1_model": {
+      "precision": 0.7662,
+      "recall": 0.6886,
+      "f1": 0.7253,
+      "false_positive_rate": 0.0033,
+      "tp": 272,
+      "fp": 83,
+      "fn": 123,
+      "tn": 24987,
+      "recall_by_kind": {
+       "large": 0.7784,
+       "burst": 0,
+       "new_account": 1
+      }
+     },
+     "rules": {
+      "precision": 0.9724,
+      "recall": 0.9823,
+      "f1": 0.9773,
+      "false_positive_rate": 0.0004,
+      "tp": 388,
+      "fp": 11,
+      "fn": 7,
+      "tn": 25059,
+      "recall_by_kind": {
+       "large": 0.985,
+       "burst": 1,
+       "new_account": 0.8333
+      }
+     },
+     "v2_model": {
+      "precision": 0.4975,
+      "recall": 0.7595,
+      "f1": 0.6012,
+      "false_positive_rate": 0.0121,
+      "tp": 300,
+      "fp": 303,
+      "fn": 95,
+      "tn": 24767,
+      "recall_by_kind": {
+       "large": 0.7156,
+       "burst": 1,
+       "new_account": 1
+      }
+     },
+     "v2_hybrid": {
+      "precision": 0.9701,
+      "recall": 0.9848,
+      "f1": 0.9774,
+      "false_positive_rate": 0.0005,
+      "tp": 389,
+      "fp": 12,
+      "fn": 6,
+      "tn": 25058,
+      "recall_by_kind": {
+       "large": 0.985,
+       "burst": 1,
+       "new_account": 0.9167
+      }
+     }
+    }
+   },
+   "fresh_seed_101": {
+    "rows": 63345,
+    "anomalies": {
+     "large": 902,
+     "burst": 159,
+     "new_account": 24
+    },
+    "detectors": {
+     "v1_model": {
+      "precision": 0.7696,
+      "recall": 0.6433,
+      "f1": 0.7008,
+      "false_positive_rate": 0.0034,
+      "tp": 698,
+      "fp": 209,
+      "fn": 387,
+      "tn": 62051,
+      "recall_by_kind": {
+       "large": 0.7472,
+       "burst": 0,
+       "new_account": 1
+      }
+     },
+     "rules": {
+      "precision": 0.9625,
+      "recall": 0.9935,
+      "f1": 0.9778,
+      "false_positive_rate": 0.0007,
+      "tp": 1078,
+      "fp": 42,
+      "fn": 7,
+      "tn": 62218,
+      "recall_by_kind": {
+       "large": 0.9945,
+       "burst": 1,
+       "new_account": 0.9167
+      }
+     },
+     "v2_model": {
+      "precision": 0.5146,
+      "recall": 0.7327,
+      "f1": 0.6046,
+      "false_positive_rate": 0.012,
+      "tp": 795,
+      "fp": 750,
+      "fn": 290,
+      "tn": 61510,
+      "recall_by_kind": {
+       "large": 0.6818,
+       "burst": 0.9811,
+       "new_account": 1
+      }
+     },
+     "v2_hybrid": {
+      "precision": 0.9608,
+      "recall": 0.9935,
+      "f1": 0.9769,
+      "false_positive_rate": 0.0007,
+      "tp": 1078,
+      "fp": 44,
+      "fn": 7,
+      "tn": 62216,
+      "recall_by_kind": {
+       "large": 0.9945,
+       "burst": 1,
+       "new_account": 0.9167
+      }
+     }
+    }
+   },
+   "fresh_seed_202": {
+    "rows": 61198,
+    "anomalies": {
+     "large": 847,
+     "burst": 159,
+     "new_account": 24
+    },
+    "detectors": {
+     "v1_model": {
+      "precision": 0.8023,
+      "recall": 0.666,
+      "f1": 0.7279,
+      "false_positive_rate": 0.0028,
+      "tp": 686,
+      "fp": 169,
+      "fn": 344,
+      "tn": 59999,
+      "recall_by_kind": {
+       "large": 0.7816,
+       "burst": 0,
+       "new_account": 1
+      }
+     },
+     "rules": {
+      "precision": 0.9651,
+      "recall": 0.9932,
+      "f1": 0.9789,
+      "false_positive_rate": 0.0006,
+      "tp": 1023,
+      "fp": 37,
+      "fn": 7,
+      "tn": 60131,
+      "recall_by_kind": {
+       "large": 0.9929,
+       "burst": 1,
+       "new_account": 0.9583
+      }
+     },
+     "v2_model": {
+      "precision": 0.5381,
+      "recall": 0.7748,
+      "f1": 0.6351,
+      "false_positive_rate": 0.0114,
+      "tp": 798,
+      "fp": 685,
+      "fn": 232,
+      "tn": 59483,
+      "recall_by_kind": {
+       "large": 0.7285,
+       "burst": 0.9874,
+       "new_account": 1
+      }
+     },
+     "v2_hybrid": {
+      "precision": 0.9624,
+      "recall": 0.9932,
+      "f1": 0.9775,
+      "false_positive_rate": 0.0007,
+      "tp": 1023,
+      "fp": 40,
+      "fn": 7,
+      "tn": 60128,
+      "recall_by_kind": {
+       "large": 0.9929,
+       "burst": 1,
+       "new_account": 0.9583
+      }
+     }
+    }
+   },
+   "fresh_seed_303": {
+    "rows": 63932,
+    "anomalies": {
+     "large": 930,
+     "burst": 145,
+     "new_account": 24
+    },
+    "detectors": {
+     "v1_model": {
+      "precision": 0.7882,
+      "recall": 0.667,
+      "f1": 0.7225,
+      "false_positive_rate": 0.0031,
+      "tp": 733,
+      "fp": 197,
+      "fn": 366,
+      "tn": 62636,
+      "recall_by_kind": {
+       "large": 0.7624,
+       "burst": 0,
+       "new_account": 1
+      }
+     },
+     "rules": {
+      "precision": 0.9706,
+      "recall": 0.99,
+      "f1": 0.9802,
+      "false_positive_rate": 0.0005,
+      "tp": 1088,
+      "fp": 33,
+      "fn": 11,
+      "tn": 62800,
+      "recall_by_kind": {
+       "large": 0.9892,
+       "burst": 1,
+       "new_account": 0.9583
+      }
+     },
+     "v2_model": {
+      "precision": 0.5484,
+      "recall": 0.7634,
+      "f1": 0.6383,
+      "false_positive_rate": 0.011,
+      "tp": 839,
+      "fp": 691,
+      "fn": 260,
+      "tn": 62142,
+      "recall_by_kind": {
+       "large": 0.7215,
+       "burst": 0.9931,
+       "new_account": 1
+      }
+     },
+     "v2_hybrid": {
+      "precision": 0.968,
+      "recall": 0.99,
+      "f1": 0.9789,
+      "false_positive_rate": 0.0006,
+      "tp": 1088,
+      "fp": 36,
+      "fn": 11,
+      "tn": 62797,
+      "recall_by_kind": {
+       "large": 0.9892,
+       "burst": 1,
+       "new_account": 0.9583
+      }
+     }
+    }
+   },
+   "shift_amount_shift": {
+    "rows": 64776,
+    "anomalies": {
+     "large": 923,
+     "burst": 152,
+     "new_account": 24
+    },
+    "detectors": {
+     "v1_model": {
+      "precision": 0.636,
+      "recall": 0.7807,
+      "f1": 0.701,
+      "false_positive_rate": 0.0077,
+      "tp": 858,
+      "fp": 491,
+      "fn": 241,
+      "tn": 63186,
+      "recall_by_kind": {
+       "large": 0.9025,
+       "burst": 0.0066,
+       "new_account": 1
+      }
+     },
+     "rules": {
+      "precision": 0.9309,
+      "recall": 0.9927,
+      "f1": 0.9608,
+      "false_positive_rate": 0.0013,
+      "tp": 1091,
+      "fp": 81,
+      "fn": 8,
+      "tn": 63596,
+      "recall_by_kind": {
+       "large": 0.9913,
+       "burst": 1,
+       "new_account": 1
+      }
+     },
+     "v2_model": {
+      "precision": 0.5397,
+      "recall": 0.9281,
+      "f1": 0.6825,
+      "false_positive_rate": 0.0137,
+      "tp": 1020,
+      "fp": 870,
+      "fn": 79,
+      "tn": 62807,
+      "recall_by_kind": {
+       "large": 0.9155,
+       "burst": 0.9934,
+       "new_account": 1
+      }
+     },
+     "v2_hybrid": {
+      "precision": 0.9246,
+      "recall": 0.9927,
+      "f1": 0.9574,
+      "false_positive_rate": 0.0014,
+      "tp": 1091,
+      "fp": 89,
+      "fn": 8,
+      "tn": 63588,
+      "recall_by_kind": {
+       "large": 0.9913,
+       "burst": 1,
+       "new_account": 1
+      }
+     }
+    },
+    "scenario": "every typical amount x3"
+   },
+   "shift_fast_normal": {
+    "rows": 155768,
+    "anomalies": {
+     "large": 2289,
+     "burst": 201,
+     "new_account": 24
+    },
+    "detectors": {
+     "v1_model": {
+      "precision": 0.8382,
+      "recall": 0.7916,
+      "f1": 0.8142,
+      "false_positive_rate": 0.0025,
+      "tp": 1990,
+      "fp": 384,
+      "fn": 524,
+      "tn": 152870,
+      "recall_by_kind": {
+       "large": 0.858,
+       "burst": 0.01,
+       "new_account": 1
+      }
+     },
+     "rules": {
+      "precision": 0.9773,
+      "recall": 0.9944,
+      "f1": 0.9858,
+      "false_positive_rate": 0.0004,
+      "tp": 2500,
+      "fp": 58,
+      "fn": 14,
+      "tn": 153196,
+      "recall_by_kind": {
+       "large": 0.9952,
+       "burst": 1,
+       "new_account": 0.875
+      }
+     },
+     "v2_model": {
+      "precision": 0.6598,
+      "recall": 0.786,
+      "f1": 0.7174,
+      "false_positive_rate": 0.0066,
+      "tp": 1976,
+      "fp": 1019,
+      "fn": 538,
+      "tn": 152235,
+      "recall_by_kind": {
+       "large": 0.7654,
+       "burst": 0.995,
+       "new_account": 1
+      }
+     },
+     "v2_hybrid": {
+      "precision": 0.9754,
+      "recall": 0.9944,
+      "f1": 0.9848,
+      "false_positive_rate": 0.0004,
+      "tp": 2500,
+      "fp": 63,
+      "fn": 14,
+      "tn": 153191,
+      "recall_by_kind": {
+       "large": 0.9952,
+       "burst": 1,
+       "new_account": 0.875
+      }
+     }
+    },
+    "scenario": "normal accounts 2-4x faster"
+   },
+   "shift_slow_bursts": {
+    "rows": 64776,
+    "anomalies": {
+     "large": 923,
+     "burst": 152,
+     "new_account": 24
+    },
+    "detectors": {
+     "v1_model": {
+      "precision": 0.7804,
+      "recall": 0.6597,
+      "f1": 0.715,
+      "false_positive_rate": 0.0032,
+      "tp": 725,
+      "fp": 204,
+      "fn": 374,
+      "tn": 63473,
+      "recall_by_kind": {
+       "large": 0.7595,
+       "burst": 0,
+       "new_account": 1
+      }
+     },
+     "rules": {
+      "precision": 0.9572,
+      "recall": 0.8944,
+      "f1": 0.9247,
+      "false_positive_rate": 0.0007,
+      "tp": 983,
+      "fp": 44,
+      "fn": 116,
+      "tn": 63633,
+      "recall_by_kind": {
+       "large": 0.9913,
+       "burst": 0.2961,
+       "new_account": 0.9583
+      }
+     },
+     "v2_model": {
+      "precision": 0.5307,
+      "recall": 0.7389,
+      "f1": 0.6177,
+      "false_positive_rate": 0.0113,
+      "tp": 812,
+      "fp": 718,
+      "fn": 287,
+      "tn": 62959,
+      "recall_by_kind": {
+       "large": 0.7096,
+       "burst": 0.875,
+       "new_account": 1
+      }
+     },
+     "v2_hybrid": {
+      "precision": 0.9571,
+      "recall": 0.9145,
+      "f1": 0.9353,
+      "false_positive_rate": 0.0007,
+      "tp": 1005,
+      "fp": 45,
+      "fn": 94,
+      "tn": 63632,
+      "recall_by_kind": {
+       "large": 0.9913,
+       "burst": 0.4408,
+       "new_account": 0.9583
+      }
+     }
+    },
+    "scenario": "bursts 0.6-2.0 s apart"
+   }
+  },
+  "fresh_seeds_summary": {
+   "v1_model": {
+    "precision": {
+     "mean": 0.7867,
+     "std": 0.0134
+    },
+    "recall": {
+     "mean": 0.6588,
+     "std": 0.0109
+    },
+    "f1": {
+     "mean": 0.7171,
+     "std": 0.0117
+    },
+    "false_positive_rate": {
+     "mean": 0.0031,
+     "std": 0.0002
+    },
+    "recall_by_kind": {
+     "large": {
+      "mean": 0.7637,
+      "std": 0.0141
+     },
+     "burst": {
+      "mean": 0,
+      "std": 0
+     },
+     "new_account": {
+      "mean": 1,
+      "std": 0
+     }
+    }
+   },
+   "rules": {
+    "precision": {
+     "mean": 0.9661,
+     "std": 0.0034
+    },
+    "recall": {
+     "mean": 0.9922,
+     "std": 0.0016
+    },
+    "f1": {
+     "mean": 0.979,
+     "std": 0.001
+    },
+    "false_positive_rate": {
+     "mean": 0.0006,
+     "std": 0.0001
+    },
+    "recall_by_kind": {
+     "large": {
+      "mean": 0.9922,
+      "std": 0.0022
+     },
+     "burst": {
+      "mean": 1,
+      "std": 0
+     },
+     "new_account": {
+      "mean": 0.9444,
+      "std": 0.0196
+     }
+    }
+   },
+   "v2_model": {
+    "precision": {
+     "mean": 0.5337,
+     "std": 0.0141
+    },
+    "recall": {
+     "mean": 0.757,
+     "std": 0.0178
+    },
+    "f1": {
+     "mean": 0.626,
+     "std": 0.0152
+    },
+    "false_positive_rate": {
+     "mean": 0.0115,
+     "std": 0.0004
+    },
+    "recall_by_kind": {
+     "large": {
+      "mean": 0.7106,
+      "std": 0.0206
+     },
+     "burst": {
+      "mean": 0.9872,
+      "std": 0.0049
+     },
+     "new_account": {
+      "mean": 1,
+      "std": 0
+     }
+    }
+   },
+   "v2_hybrid": {
+    "precision": {
+     "mean": 0.9637,
+     "std": 0.0031
+    },
+    "recall": {
+     "mean": 0.9922,
+     "std": 0.0016
+    },
+    "f1": {
+     "mean": 0.9778,
+     "std": 0.0008
+    },
+    "false_positive_rate": {
+     "mean": 0.0007,
+     "std": 0
+    },
+    "recall_by_kind": {
+     "large": {
+      "mean": 0.9922,
+      "std": 0.0022
+     },
+     "burst": {
+      "mean": 1,
+      "std": 0
+     },
+     "new_account": {
+      "mean": 0.9444,
+      "std": 0.0196
+     }
+    }
+   }
+  },
+  "disagreements_held_out": {
+   "model_only": {
+    "new_account": 1,
+    "normal": 1
+   },
+   "rules_only": {
+    "large": 305,
+    "normal": 9,
+    "burst": 19
+   },
+   "both": {
+    "new_account": 10,
+    "large": 24,
+    "burst": 30,
+    "normal": 2
+   }
+  },
+  "inference_latency_ms_single_row_cpu": {
+   "iforest-v1": {
+    "p50": 7.904,
+    "p95": 10.187,
+    "samples": 300
+   },
+   "iforest-v2": {
+    "p50": 16.236,
+    "p95": 23.207,
+    "samples": 300
+   }
+  },
+  "notes": [
+   "Synthetic data only; the rule baseline was written against the same generator, which is why it is strong in-distribution.",
+   "Thresholds were chosen on validation data at training time; nothing is tuned on these datasets.",
+   "Per-scenario recall: the share of each injected anomaly kind that was flagged."
+  ]
+ }
 }

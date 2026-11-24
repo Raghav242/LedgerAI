@@ -1,0 +1,213 @@
+# Continuous integration (Phase 6C). Non-destructive: it never touches a developer's stack.
+# Every third-party action is pinned to a full commit SHA (tag in the comment); images in
+# `services:` are the same versions as docker-compose.yml. Credentials below are throwaway
+# values for ephemeral CI containers, never real secrets.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+  # Safe CI-only configuration (the .env file is never committed).
+  APP_ENV: test
+  POSTGRES_USER: ledgerflow
+  POSTGRES_PASSWORD: ci_only_postgres_password
+  POSTGRES_HOST: 127.0.0.1
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ledgerflow
+  POSTGRES_TEST_DB: ledgerflow_test
+  APP_DB_PASSWORD: ci_only_runtime_role_password
+  RABBITMQ_USER: ledgerflow
+  RABBITMQ_PASSWORD: ci_only_rabbitmq_password
+  RABBITMQ_HOST: 127.0.0.1
+  RABBITMQ_PORT: "5672"
+  REDIS_URL: redis://127.0.0.1:6379/0
+  LAB_TRAFFIC_SECRET: ci-only-lab-signing-key-not-a-secret-0123456789
+  ENABLE_DEV_ENDPOINTS: "false"
+
+jobs:
+  backend:
+    name: Backend lint + unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.lock
+      - name: Install pinned dependencies
+        run: |
+          pip install -r requirements.lock -r requirements-ai.lock -r requirements-dev.lock
+          pip install --no-deps -e .
+      - run: ruff check .
+      - run: ruff format --check .
+      - name: Unit tests (includes model reproducibility and Compose isolation checks)
+        run: pytest tests/unit -q
+
+  integration:
+    name: Integration tests (PostgreSQL, Redis, RabbitMQ)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ledgerflow
+          POSTGRES_PASSWORD: ci_only_postgres_password
+          POSTGRES_DB: ledgerflow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ledgerflow" --health-interval 5s --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-retries 20
+      rabbitmq:
+        image: rabbitmq:4.1-management-alpine
+        env:
+          RABBITMQ_DEFAULT_USER: ledgerflow
+          RABBITMQ_DEFAULT_PASS: ci_only_rabbitmq_password
+        ports: ["5672:5672", "15672:15672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q check_port_connectivity"
+          --health-interval 10s --health-timeout 10s --health-retries 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.lock
+      - run: |
+          pip install -r requirements.lock -r requirements-ai.lock -r requirements-dev.lock
+          pip install --no-deps -e .
+      # The suite runs the application as the least-privilege runtime role (conftest), on
+      # the separate ledgerflow_test database, with per-test broker prefixes.
+      - name: Integration, Redis and RabbitMQ tests (stack tests excluded)
+        run: pytest tests/integration tests/ratelimit -q
+
+  migrations:
+    name: Alembic + database roles
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ledgerflow
+          POSTGRES_PASSWORD: ci_only_postgres_password
+          POSTGRES_DB: ledgerflow
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ledgerflow" --health-interval 5s --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.lock
+      - run: |
+          pip install -r requirements.lock -r requirements-dev.lock
+          pip install --no-deps -e .
+      - name: Upgrade to head on an empty database
+        run: alembic upgrade head
+      - name: Models and migrations agree (no pending autogenerate changes)
+        run: alembic check
+      - name: Every migration is reversible
+        run: alembic downgrade base && alembic upgrade head
+      - name: Runtime role grants apply and verify
+        run: python -m app.core.db_roles
+
+  frontend:
+    name: Frontend lint, types, tests, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  openapi:
+    name: OpenAPI types match the API
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements*.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: |
+          pip install -r requirements.lock
+          pip install --no-deps -e .
+      - run: npm ci
+        working-directory: frontend
+      - name: Regenerate frontend types from the code and require no diff
+        run: |
+          python scripts/export_openapi.py openapi.json
+          cd frontend
+          npx openapi-typescript ../openapi.json -o src/types/openapi.gen.ts
+          git diff --exit-code -- src/types/openapi.gen.ts
+
+  compose:
+    name: Compose configuration
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Development, benchmark and stack-test projects render
+        run: |
+          docker compose config --quiet
+          docker compose --profile scale4 --profile observability --profile maintenance config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.demo.yml config --quiet
+      - name: Images build (API and AI worker)
+        run: |
+          docker build --target api -t ledgerflow-api:ci .
+          docker build --target ai -t ledgerflow-ai:ci .
+          docker build -t ledgerflow-frontend:ci frontend

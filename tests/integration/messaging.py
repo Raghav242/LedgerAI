@@ -15,10 +15,12 @@ from pika.exceptions import AMQPError
 
 from app.core.config import Settings
 from app.events.consumer import AuditHandler, EventConsumer
+from app.events.dead_letter_policy import ensure_dead_letter_policy, remove_dead_letter_policy
 from app.events.publisher import OutboxPublisher
 from app.events.rabbitmq import Topology, connect, declare_topology
 
 TEST_RETRY_DELAYS_MS = [50, 100, 150]
+MANAGEMENT_URL = "http://127.0.0.1:15672"
 
 
 class SimulatedCrash(BaseException):
@@ -48,6 +50,8 @@ def event_settings(rabbit_available: Settings) -> Iterator[Settings]:
             "outbox_retry_base_ms": 1,
             "outbox_retry_max_ms": 1,
             "outbox_poll_interval_ms": 50,
+            # Consumers apply their dead-letter routing policy through the management API.
+            "rabbitmq_management_url": MANAGEMENT_URL,
         }
     )
     yield settings
@@ -60,14 +64,20 @@ def topology_of(settings: Settings) -> Topology:
 
 def delete_topology(settings: Settings) -> None:
     topology = topology_of(settings)
+    remove_dead_letter_policy(settings, topology)
     try:
         connection = connect(settings)
     except (AMQPError, OSError):
         return
     channel = connection.channel()
-    for queue in topology.all_queues:
+    for queue in (*topology.all_queues, topology.unrouted_dead_letter_queue):
         channel.queue_delete(queue)
-    for exchange in (topology.exchange, topology.dead_letter_exchange):
+    for exchange in (
+        topology.exchange,
+        topology.dead_letter_router,
+        topology.dead_letter_exchange,
+        topology.unrouted_exchange,
+    ):
         channel.exchange_delete(exchange)
     connection.close()
 
@@ -76,6 +86,7 @@ def declare(settings: Settings) -> None:
     connection = connect(settings)
     declare_topology(connection.channel(), topology_of(settings))
     connection.close()
+    ensure_dead_letter_policy(settings, topology_of(settings))
 
 
 def queue_depth(settings: Settings, queue: str) -> int:

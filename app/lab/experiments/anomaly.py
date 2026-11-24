@@ -88,8 +88,7 @@ async def run(ctx: ExperimentContext, params: AnomalyScenarioParams) -> Experime
     if result is not None:
         verdict = "flagged" if result["is_anomaly"] else "did not flag"
         rec.note(
-            f"Model {result['model_version']} {verdict} the transfer "
-            f"(score {result['score']:.3f}, threshold {result['threshold']:.3f})",
+            f"{result['model_version']} {verdict} the transfer: {_verdicts(result)}",
             level="warning" if result["is_anomaly"] else "success",
         )
     checks = [
@@ -174,16 +173,29 @@ async def run(ctx: ExperimentContext, params: AnomalyScenarioParams) -> Experime
     )
 
 
+def _verdicts(result: dict) -> str:
+    """The model's and the rules' verdicts, each stated truthfully.
+
+    With the hybrid decision (Phase 6B) the final verdict can come from the rules while
+    the model's score is below its threshold, so the comparison sign is the MODEL's own.
+    """
+    model_flag = result["score"] >= result["threshold"]
+    return (
+        f"model score {result['score']:.4f} {'≥' if model_flag else '<'} threshold "
+        f"{result['threshold']:.4f}; rule baseline "
+        + ("fired" if result["rule_flags"] else "did not fire")
+    )
+
+
 def _summary(scenario: str, result: dict | None, intent: bool) -> str:
     if result is None:
         return (
             "The transfer committed, but no AI result arrived in time (is the ai-worker running?)."
         )
     flagged = result["is_anomaly"]
-    comparison = "≥" if flagged else "<"
     head = (
-        f"The model {'flagged' if flagged else 'did not flag'} this transfer "
-        f"(score {result['score']:.3f} {comparison} threshold {result['threshold']:.3f})."
+        f"The detector {'flagged' if flagged else 'did not flag'} this transfer "
+        f"({_verdicts(result)})."
     )
     if flagged == intent:
         tail = " That matches what the scenario was designed to look like."

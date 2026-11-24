@@ -71,7 +71,7 @@ def test_shipped_model_loads_and_scores_on_cpu() -> None:
     assert ARTIFACT.exists()
     model = AnomalyModel.load()
     meta = model.metadata
-    assert meta["version"] == "iforest-v1" and tuple(meta["features"]) == FEATURE_NAMES
+    assert meta["version"] == "iforest-v2" and tuple(meta["features"]) == FEATURE_NAMES
     usual = PriorStats(count=20, median_amount_minor=3_000, last_at=T, count_last_60s=1)
     normal = compute_features(
         amount_minor=3_100,

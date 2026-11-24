@@ -1,5 +1,5 @@
 import { Menu, Moon, Sun } from "lucide-react";
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router";
 import { LoadingRows } from "@/components/common/states";
 import { Badge } from "@/components/ui/badge";
@@ -8,7 +8,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { useTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/utils";
 import { ConnectionStatus } from "./ConnectionStatus";
-import { NAV_ITEMS, type NavItem } from "./nav";
+import { NAV_GROUPS, NAV_ITEMS, type NavItem } from "./nav";
 
 function Brand() {
   return (
@@ -52,13 +52,22 @@ function SidebarNav({ onNavigate }: { onNavigate?: () => void }) {
   const live = NAV_ITEMS.filter((i) => i.status === "live");
   const planned = NAV_ITEMS.filter((i) => i.status === "planned");
   return (
-    <nav aria-label="Main" className="flex flex-1 flex-col gap-6">
-      <div className="flex flex-col gap-0.5">
-        <div className="px-2.5 pb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">Lab</div>
-        {live.map((item) => (
-          <NavEntry key={item.to} item={item} onNavigate={onNavigate} />
-        ))}
-      </div>
+    <nav aria-label="Main" className="flex flex-1 flex-col gap-5 overflow-y-auto">
+      {NAV_GROUPS.map((group) => {
+        const items = live.filter((i) => i.group === group);
+        if (items.length === 0) return null;
+        const id = `nav-group-${group.toLowerCase()}`;
+        return (
+          <div key={group} className="flex flex-col gap-0.5" role="group" aria-labelledby={id}>
+            <div id={id} className="px-2.5 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">
+              {group}
+            </div>
+            {items.map((item) => (
+              <NavEntry key={item.to} item={item} onNavigate={onNavigate} />
+            ))}
+          </div>
+        );
+      })}
       {planned.length > 0 && (
         <div className="flex flex-col gap-0.5">
           <div className="px-2.5 pb-1.5 text-[11px] font-medium tracking-wide text-muted-foreground/80 uppercase">Roadmap</div>
@@ -85,9 +94,19 @@ export function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
   const current = NAV_ITEMS.find((i) => (i.to === "/" ? location.pathname === "/" : location.pathname.startsWith(i.to)));
+  // Tabs, history and screen readers name the page, not just the app.
+  useEffect(() => {
+    document.title = current ? `${current.label} · LedgerFlow AI` : "LedgerFlow AI";
+  }, [current]);
 
   return (
     <div className="flex min-h-svh">
+      <a
+        href="#main"
+        className="sr-only z-50 rounded-md bg-background px-3 py-2 text-sm font-medium shadow focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:ring-[3px] focus:ring-ring/50"
+      >
+        Skip to main content
+      </a>
       <aside className="sticky top-0 hidden h-svh w-64 shrink-0 flex-col gap-6 border-r bg-sidebar p-4 lg:flex">
         <Brand />
         <SidebarNav />
@@ -121,7 +140,7 @@ export function AppShell() {
             {theme === "dark" ? <Sun /> : <Moon />}
           </Button>
         </header>
-        <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6">
+        <main id="main" tabIndex={-1} className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 outline-none sm:px-6">
           {/* Lab pages are code-split; the shell stays put while one loads. */}
           <Suspense fallback={<LoadingRows rows={4} />}>
             <Outlet />

@@ -1,9 +1,11 @@
 """Benchmark runs started by the local controller (Phase 5E Performance Lab).
 
-Reuses the existing harness unchanged in behaviour: benchmarks/run_benchmarks.py redeploys
-the stack against the SEPARATE database `ledgerflow_bench`, runs Locust in a container,
-writes benchmarks/results/<timestamp>.{json,md} and restores the default stack in a
-`finally`. The controller only adds bounds, exclusivity and progress reporting.
+Runs the existing harness: benchmarks/run_benchmarks.py brings up the ISOLATED Compose
+project `ledgerflow-bench` (own containers, network, volumes, ports and database), runs
+Locust in a container on that project's network, writes
+benchmarks/results/<timestamp>.{json,md} and removes the benchmark project in a `finally`.
+The development stack is never redeployed. The controller only adds bounds, exclusivity
+(results stay comparable when nothing else loads the machine) and progress reporting.
 """
 
 import subprocess
@@ -21,7 +23,7 @@ HARNESS = ROOT / "benchmarks" / "run_benchmarks.py"
 LOG_LINES = 200
 RESTORE_SNIPPET = (
     "import sys; sys.path.insert(0, 'scripts'); import stack_control; "
-    "stack_control.restore_default()"
+    "stack_control.teardown(stack_control.BENCH)"
 )
 
 
@@ -126,8 +128,10 @@ class BenchmarkJob:
         timed_out = not timer.is_alive() and code != 0
         timer.cancel()
         if timed_out:
-            # A killed harness never reaches its own `finally: restore_default()`.
-            self._log.append(f"== time limit of {limit_s} s reached; restoring the default stack")
+            # A killed harness never reaches its own `finally: teardown(BENCH)`.
+            self._log.append(
+                f"== time limit of {limit_s} s reached; removing the benchmark project"
+            )
             restore = subprocess.run(
                 [sys.executable, "-c", RESTORE_SNIPPET],
                 cwd=ROOT,

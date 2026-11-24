@@ -2,7 +2,7 @@
 
     python -m labctl                     # status only: failure experiments disabled
     python -m labctl --enable-failures   # allow the four allow-listed failure experiments
-    python -m labctl --enable-benchmarks # allow bounded Locust runs (isolated benchmark DB)
+    python -m labctl --enable-benchmarks # allow bounded Locust runs (isolated bench project)
 
 Binds 127.0.0.1 only. Stop with Ctrl+C; a run in progress is cancelled and every
 disturbed service is restored before the process exits.
@@ -38,7 +38,7 @@ def main() -> None:
     parser.add_argument(
         "--enable-benchmarks",
         action="store_true",
-        help="allow bounded benchmark runs (redeploys the stack against ledgerflow_bench)",
+        help="allow bounded benchmark runs (separate Compose project ledgerflow-bench)",
     )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     args = parser.parse_args()

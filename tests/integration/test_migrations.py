@@ -15,6 +15,7 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from tests.integration.conftest import apply_test_runtime_role
 from tests.integration.support import reconcile
 
 SYSTEM = uuid.UUID("00000000-0000-0000-0000-000000000001")
@@ -33,6 +34,7 @@ def phase1_database(alembic_config: Config, engine: Engine) -> Iterator[Engine]:
             conn.execute(text("TRUNCATE TABLE accounts, transfers CASCADE"))
         command.downgrade(alembic_config, "0001")  # no-op if the upgrade aborted
         command.upgrade(alembic_config, "head")  # re-seeds the system account
+        apply_test_runtime_role(engine)  # recreated tables lost the runtime role's grants
 
 
 def _insert_phase1(engine: Engine, balances: dict[str, int], transfers: list[tuple]) -> dict:

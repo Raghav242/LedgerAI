@@ -8,8 +8,11 @@ what the application itself can observe.
   PostgreSQL     a query from this replica (latency, connections)
   Redis          PING + INFO from this replica (the rate limiter's own client)
   workers        their own heartbeat rows; stale when past their announced deadline
-  RabbitMQ       derived: the API never connects to the broker; the workers report
-                 whether their broker connection is up, plus queue depths
+  RabbitMQ       probe (when configured, Phase 6A): management-API health check and queue
+                 depths (incl. dead-letter queues) read with a monitoring-only user whose
+                 permissions match no resource; the API never speaks AMQP and never holds
+                 broker admin credentials. Without the probe: derived from what the workers
+                 report about their own broker connection.
   Jaeger         HTTP probe of its query API, when configured
 
 Probes run in parallel with short timeouts, so one dead dependency costs about a second,
@@ -21,8 +24,10 @@ import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 import redis
@@ -45,6 +50,35 @@ WORKER_NAMES = {
     "event-consumer": "Event consumer",
     "anomaly-detector": "AI anomaly worker",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerQueue:
+    name: str
+    role: Literal["main", "retry", "dead_letter"]
+    ready: int
+    unacked: int
+
+
+@dataclass(frozen=True, slots=True)
+class BrokerProbe:
+    """What the independent management-API probe saw (Phase 6A)."""
+
+    state: Literal["ok", "alarm", "auth", "down"]
+    at: datetime
+    latency_ms: float | None = None
+    queues: list[BrokerQueue] = field(default_factory=list)
+    error: str | None = None
+
+    @property
+    def dead_lettered(self) -> int:
+        return sum(q.ready + q.unacked for q in self.queues if q.role == "dead_letter")
+
+
+def _queue_role(name: str) -> Literal["main", "retry", "dead_letter"]:
+    if name.endswith(".dlq"):
+        return "dead_letter"
+    return "retry" if ".retry." in name else "main"
 
 
 def _now() -> datetime:
@@ -422,8 +456,126 @@ class TopologyProbe:
             rows = None
         expected = self._settings.observability_expected_workers
         components = [self._worker(component, rows, expected) for component in WORKER_NAMES]
-        components.append(self._broker(rows))
+        probe = self.probe_broker()
+        components.append(self._broker(rows) if probe is None else self._broker_probed(rows, probe))
         return components
+
+    def probe_broker(self) -> BrokerProbe | None:
+        """Independent, read-only broker check through the management API (or None).
+
+        Uses the monitoring-only user: it can read health checks and queue depths, and its
+        vhost permissions match no resource ("^$"), so this replica cannot declare,
+        publish, consume or change anything on the broker.
+        """
+        url = self._settings.rabbitmq_management_url
+        password = self._settings.rabbitmq_monitor_password
+        if url is None or password is None:
+            return None
+        auth = (self._settings.rabbitmq_monitor_user, password.get_secret_value())
+        at = _now()
+        started = time.perf_counter()
+        try:
+            alarms = self._http.get(f"{url}/api/health/checks/alarms", auth=auth)
+            latency = (time.perf_counter() - started) * 1000
+            if alarms.status_code in (401, 403):
+                return BrokerProbe("auth", at, latency, error=f"HTTP {alarms.status_code}")
+            vhost = quote(self._settings.rabbitmq_vhost, safe="")
+            response = self._http.get(
+                f"{url}/api/queues/{vhost}",
+                params={"columns": "name,messages_ready,messages_unacknowledged"},
+                auth=auth,
+            )
+            rows = response.json() if response.status_code == 200 else []
+        except (httpx.HTTPError, ValueError) as exc:
+            return BrokerProbe("down", at, error=type(exc).__name__)
+        prefix = f"{self._settings.events_topology_prefix}."
+        queues = sorted(
+            (
+                BrokerQueue(
+                    name=row["name"],
+                    role=_queue_role(row["name"]),
+                    ready=int(row.get("messages_ready") or 0),
+                    unacked=int(row.get("messages_unacknowledged") or 0),
+                )
+                for row in (rows if isinstance(rows, list) else [])
+                if isinstance(row, dict) and str(row.get("name", "")).startswith(prefix)
+            ),
+            key=lambda q: q.name,
+        )
+        if alarms.status_code == 200:
+            return BrokerProbe("ok", at, latency, queues)
+        if alarms.status_code == 503:
+            return BrokerProbe("alarm", at, latency, queues, error="resource alarm in effect")
+        return BrokerProbe("down", at, latency, error=f"health check HTTP {alarms.status_code}")
+
+    def _broker_probed(self, rows: list[Any] | None, probe: BrokerProbe) -> ComponentHealth:
+        fresh = [
+            r
+            for r in rows or []
+            if r["next_beat_before"] >= r["db_now"]
+            and (r["details"] or {}).get("broker_connected") is not None
+        ]
+        connected = sum(1 for r in fresh if r["details"]["broker_connected"])
+        metrics = [_metric("workers_connected", "Workers connected", f"{connected}/{len(fresh)}")]
+        if probe.queues:
+            metrics.append(
+                _metric("dead_lettered", "Dead-lettered (all DLQs)", probe.dead_lettered)
+            )
+            metrics.extend(
+                _metric(f"queue:{q.name}", f"{q.name} ready", q.ready) for q in probe.queues
+            )
+        source = f"management API, probed by {self._settings.replica_id} (monitoring user)"
+        dlq_note = (
+            f" {probe.dead_lettered} dead-lettered message(s) await inspection."
+            if probe.dead_lettered
+            else ""
+        )
+        if probe.state == "auth":
+            return ComponentHealth(
+                id="rabbitmq",
+                name="RabbitMQ",
+                kind="broker",
+                status="unknown",
+                evidence="none",
+                source=source,
+                message=(
+                    "The monitoring credentials were rejected; run the rabbitmq-monitor-setup "
+                    "job (docker compose up rabbitmq-monitor-setup)."
+                ),
+                observed_at=probe.at,
+                age_seconds=0.0,
+                last_error=probe.error,
+                last_error_at=probe.at,
+                metrics=metrics,
+            )
+        status: ComponentStatus
+        if probe.state == "ok":
+            status = "healthy"
+            message = "Health check passed (no resource alarms)." + dlq_note
+        elif probe.state == "alarm":
+            status = "degraded"
+            message = (
+                "A memory or disk alarm is in effect: publishers are blocked; transfers still "
+                "commit and events wait in the outbox." + dlq_note
+            )
+        else:
+            status = "unhealthy"
+            message = (
+                "Management API not reachable: the broker is down or unreachable. Transfers "
+                "still commit; events wait in the outbox."
+            )
+        return self._probed(
+            "rabbitmq",
+            name="RabbitMQ",
+            kind="broker",
+            status=status,
+            message=message,
+            at=probe.at,
+            latency_ms=probe.latency_ms,
+            metrics=metrics,
+            error=probe.error,
+            source=source,
+        )
 
     def _worker(
         self, component: str, rows: list[Any] | None, expected: list[str]

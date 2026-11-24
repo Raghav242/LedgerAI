@@ -16,7 +16,8 @@
     "test": "node scripts/vitest.mjs run",
     "test:watch": "node scripts/vitest.mjs",
     "test:e2e": "playwright test",
-    "gen:api": "openapi-typescript http://127.0.0.1:8080/openapi.json -o src/types/openapi.gen.ts"
+    "gen:api": "openapi-typescript http://127.0.0.1:8080/openapi.json -o src/types/openapi.gen.ts",
+    "gen:api:offline": "python ../scripts/export_openapi.py ../openapi.json && openapi-typescript ../openapi.json -o src/types/openapi.gen.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^7.0.7",

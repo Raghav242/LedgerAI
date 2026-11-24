@@ -45,6 +45,8 @@ def _client(limiter: object) -> Iterator[TestClient]:
         postgres_password="p",
         rate_limit_backend="memory",
         enable_dev_endpoints=True,
+        # Required with dev endpoints (no fallback derived from POSTGRES_PASSWORD).
+        lab_traffic_secret="unit-tests-only-lab-signing-key-0123456789",
         expose_replica_header=True,
         replica_id="unit-replica",
     )

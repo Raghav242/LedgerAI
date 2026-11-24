@@ -1,0 +1,295 @@
+{
+  "version": "iforest-v2",
+  "algorithm": "one scikit-learn IsolationForest per feature family ['amount', 'velocity'] (n_estimators=200, max_samples=256); score = max over families of the training percentile",
+  "families": {
+    "amount": [
+      "log_amount",
+      "amount_vs_baseline",
+      "log_prior_transfers",
+      "log_account_age"
+    ],
+    "velocity": [
+      "log_secs_since_prev",
+      "gap_vs_typical",
+      "burst_10s",
+      "rate_vs_typical_60s",
+      "log_prior_transfers"
+    ]
+  },
+  "model_threshold": 0.988591,
+  "features": [
+    "log_amount",
+    "amount_vs_baseline",
+    "log_prior_transfers",
+    "burst_60s",
+    "log_secs_since_prev",
+    "log_account_age",
+    "gap_vs_typical",
+    "burst_10s",
+    "rate_vs_typical_60s"
+  ],
+  "feature_schema_version": 2,
+  "decision": "hybrid",
+  "decision_rule": "hybrid = model score >= threshold OR any rule-baseline flag; adopted because its validation F1 (0.9854) beat the model alone (0.6026) by >= 0.01",
+  "threshold": 0.998415,
+  "threshold_rule": "maximises hybrid F1 on the validation split",
+  "validation": {
+    "model_f1": 0.6026,
+    "hybrid_f1": 0.9854
+  },
+  "score_meaning": "0-1: the highest training percentile of this transfer's unusualness in any feature family (0.99 = more unusual than 99% of training transfers in at least one respect). Not a probability.",
+  "seed": 20261120,
+  "trained_at": "2026-11-23T22:51:26+00:00",
+  "environment": {
+    "python": "3.13.5",
+    "scikit_learn": "1.9.1",
+    "numpy": "2.5.5"
+  },
+  "dataset": {
+    "kind": "synthetic, compressed clock (see app/ai/synthetic.py)",
+    "rows": 128076,
+    "split": "60/20/20 by account",
+    "train": {
+      "normal": 76657,
+      "large": 1053,
+      "burst": 178,
+      "new_account": 28
+    },
+    "validation": {
+      "normal": 24321,
+      "large": 330,
+      "burst": 36,
+      "new_account": 8
+    },
+    "test": {
+      "normal": 25070,
+      "large": 334,
+      "burst": 49,
+      "new_account": 12
+    }
+  },
+  "reference": {
+    "log_amount": {
+      "p05": 2.4493,
+      "median": 3.7575,
+      "p95": 5.2608,
+      "deciles": [
+        2.749832,
+        3.099191,
+        3.346389,
+        3.557916,
+        3.757472,
+        3.966511,
+        4.201404,
+        4.485034,
+        4.884921
+      ]
+    },
+    "amount_vs_baseline": {
+      "p05": -0.5937,
+      "median": 0.0,
+      "p95": 0.6326,
+      "deciles": [
+        -0.46199,
+        -0.300676,
+        -0.185573,
+        -0.087669,
+        0.0,
+        0.089669,
+        0.191161,
+        0.312292,
+        0.481681
+      ]
+    },
+    "log_prior_transfers": {
+      "p05": 1.7918,
+      "median": 3.989,
+      "p95": 5.3799,
+      "deciles": [
+        2.397895,
+        3.044522,
+        3.465736,
+        3.73767,
+        3.988984,
+        4.248495,
+        4.521789,
+        4.804021,
+        5.153292
+      ]
+    },
+    "burst_60s": {
+      "p05": 0.0,
+      "median": 4.0,
+      "p95": 11.0,
+      "deciles": [
+        1.0,
+        2.0,
+        3.0,
+        3.0,
+        4.0,
+        5.0,
+        6.0,
+        8.0,
+        10.0
+      ]
+    },
+    "log_secs_since_prev": {
+      "p05": 0.9298,
+      "median": 2.2714,
+      "p95": 4.0732,
+      "deciles": [
+        1.109552,
+        1.430311,
+        1.720979,
+        1.996196,
+        2.271404,
+        2.550148,
+        2.854634,
+        3.214305,
+        3.69883
+      ]
+    },
+    "log_account_age": {
+      "p05": 4.8824,
+      "median": 6.8237,
+      "p95": 7.4469,
+      "deciles": [
+        5.395111,
+        5.982342,
+        6.346652,
+        6.613281,
+        6.823734,
+        6.999156,
+        7.146012,
+        7.277223,
+        7.393563
+      ]
+    },
+    "gap_vs_typical": {
+      "p05": -1.4076,
+      "median": 0.0,
+      "p95": 1.3098,
+      "deciles": [
+        -1.069538,
+        -0.695608,
+        -0.437766,
+        -0.198046,
+        0.0,
+        0.19113,
+        0.424506,
+        0.690458,
+        1.04105
+      ]
+    },
+    "burst_10s": {
+      "p05": 0.0,
+      "median": 1.0,
+      "p95": 2.0,
+      "deciles": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        2.0
+      ]
+    },
+    "rate_vs_typical_60s": {
+      "p05": -1.1018,
+      "median": -0.247,
+      "p95": 0.1964,
+      "deciles": [
+        -0.820195,
+        -0.578494,
+        -0.442261,
+        -0.335059,
+        -0.247026,
+        -0.168413,
+        -0.088512,
+        0.0,
+        0.092674
+      ]
+    }
+  },
+  "expected_anomaly_rate": 0.0025,
+  "evaluation": {
+    "split": "held-out test accounts (never seen in training or threshold selection)",
+    "deployed": {
+      "precision": 0.9701,
+      "recall": 0.9848,
+      "f1": 0.9774,
+      "false_positive_rate": 0.0005,
+      "tp": 389,
+      "fp": 12,
+      "fn": 6,
+      "tn": 25058,
+      "recall_by_kind": {
+        "large": 0.985,
+        "burst": 1.0,
+        "new_account": 0.9167
+      }
+    },
+    "model": {
+      "precision": 0.4975,
+      "recall": 0.7595,
+      "f1": 0.6012,
+      "false_positive_rate": 0.0121,
+      "tp": 300,
+      "fp": 303,
+      "fn": 95,
+      "tn": 24767,
+      "recall_by_kind": {
+        "large": 0.7156,
+        "burst": 1.0,
+        "new_account": 1.0
+      }
+    },
+    "hybrid": {
+      "precision": 0.9701,
+      "recall": 0.9848,
+      "f1": 0.9774,
+      "false_positive_rate": 0.0005,
+      "tp": 389,
+      "fp": 12,
+      "fn": 6,
+      "tn": 25058,
+      "recall_by_kind": {
+        "large": 0.985,
+        "burst": 1.0,
+        "new_account": 0.9167
+      }
+    },
+    "rule_baseline": {
+      "precision": 0.9724,
+      "recall": 0.9823,
+      "f1": 0.9773,
+      "false_positive_rate": 0.0004,
+      "tp": 388,
+      "fp": 11,
+      "fn": 7,
+      "tn": 25059,
+      "recall_by_kind": {
+        "large": 0.985,
+        "burst": 1.0,
+        "new_account": 0.8333
+      }
+    },
+    "inference_latency_ms_single_row_cpu": {
+      "p50": 16.419,
+      "p95": 24.964,
+      "samples": 300
+    }
+  },
+  "limitations": [
+    "Trained and evaluated on synthetic data only; says nothing about real-world fraud.",
+    "Labels are the generator's intent; the model never sees them during training.",
+    "Compressed clock: seconds stand in for hours or days so lab scenarios run live.",
+    "Only the source account's own history is used (no counterparties, devices, geography).",
+    "The score is relative unusualness, not a probability.",
+    "Velocity features need at least three earlier transfers to know an account's cadence; before that they are neutral."
+  ],
+  "artifact_sha256": "b6a2b80529e339798916b2733ca7362d889f7d0bc219c6754075e4dce371f3bf"
+}

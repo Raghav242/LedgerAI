@@ -5,7 +5,7 @@ never loads the model (transfers can never wait for inference)."""
 import subprocess
 import sys
 import uuid
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -119,7 +119,7 @@ def test_ai_api_is_read_only_and_reports_pending_results(
     client: TestClient, session_factory: Factory, model: AnomalyModel
 ) -> None:
     info = client.get("/api/v1/ai/model").json()
-    assert info["available"] and info["version"] == "iforest-v1"
+    assert info["available"] and info["version"] == "iforest-v2"
     assert info["evaluation"]["model"]["f1"] > 0
     source = create_account(session_factory, funded=50_000)
     result = transfer(session_factory, source, create_account(session_factory), 2_000)
@@ -144,3 +144,51 @@ def test_the_api_process_never_loads_the_model() -> None:
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert out.stdout.strip().splitlines()[-1] == "False False"
+
+
+def test_drift_endpoint_reports_psi_against_the_training_distribution(
+    client: TestClient, session_factory: Factory
+) -> None:
+    """Phase 6B: too few rows -> insufficient_data; training-like inputs stay stable on most
+    features, a shifted amount distribution is flagged."""
+    import uuid as _uuid
+
+    from app.ai.model import ACTIVE_VERSION, load_metadata
+
+    empty = client.get("/api/v1/ai/drift").json()
+    assert empty["overall"] == "insufficient_data" and empty["sample_size"] == 0
+    meta = load_metadata()
+    assert meta is not None
+    reference = meta["reference"]
+    rng = __import__("random").Random(7)
+    with session_factory() as session, session.begin():
+        for i in range(120):
+            features = {}
+            for name in meta["features"]:
+                deciles = reference[name]["deciles"]
+                features[name] = rng.choice(deciles)  # spread over the training deciles
+            features["log_amount"] = 9.5  # a big shift in one feature
+            session.add(
+                AnomalyResult(
+                    event_id=_uuid.uuid4(),
+                    transfer_id=_uuid.uuid4(),
+                    source_account_id=_uuid.uuid4(),
+                    model_version=ACTIVE_VERSION,
+                    score=0.5,
+                    threshold=meta["threshold"],
+                    is_anomaly=i % 10 == 0,
+                    features=features,
+                    explanation=[],
+                    rule_flags=[],
+                    inference_ms=1.0,
+                    delivery_attempt=1,
+                    occurred_at=datetime.now(UTC),
+                )
+            )
+    report = client.get("/api/v1/ai/drift", params={"limit": 100}).json()
+    assert report["sample_size"] == 100 and report["model_version"] == ACTIVE_VERSION
+    assert report["features"][0]["feature"] == "log_amount"
+    assert report["features"][0]["status"] == "significant"
+    assert report["overall"] == "significant"
+    assert report["live_anomaly_rate"] == 0.1
+    assert client.get("/api/v1/ai/drift", params={"limit": 10}).status_code == 422

@@ -24,7 +24,14 @@ from demo_common import (
     transfer_body,
     verify_ledger,
 )
-from stack_control import deploy, ensure_local, reset_rate_limits, restore_default, wait_ready
+from stack_control import (
+    HOST_REDIS_URL,
+    deploy,
+    ensure_local,
+    reset_rate_limits,
+    restore_default,
+    wait_ready,
+)
 
 from app.lab.experiments.rate_limiting import per_replica_counterfactual as counterfactual_for
 from app.rate_limiting import RateLimitPolicy
@@ -94,7 +101,7 @@ def main() -> None:
             source = create_demo_account(client, run_id, "source")
             destination = create_demo_account(client, run_id, "destination")
             fund(client, source, 1_000_000)
-            reset_rate_limits()  # setup spent write tokens: start from a full bucket
+            reset_rate_limits(HOST_REDIS_URL)  # setup spent write tokens: start from a full bucket
 
             print(f"\n1) {args.requests} concurrent $1.00 transfers through NGINX")
             started = time.monotonic()

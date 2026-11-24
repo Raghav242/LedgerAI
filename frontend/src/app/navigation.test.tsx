@@ -94,4 +94,23 @@ describe("application navigation", () => {
     renderApp("/topology");
     expect(await screen.findByRole("button", { name: "API connected" })).toBeInTheDocument();
   });
+
+  it("groups the sections, names each page in the tab title and offers a skip link", async () => {
+    stubBackend();
+    const { user } = renderApp("/ledger");
+    const nav = screen.getByRole("navigation", { name: "Main" });
+    for (const [group, link] of [
+      ["Start", "Guided Demo"],
+      ["Money", "Ledger & Reconciliation"],
+      ["Labs", "AI Anomaly Lab"],
+      ["Observe", "Event Pipeline"],
+    ] as const) {
+      const section = within(nav).getByRole("group", { name: group });
+      expect(within(section).getByRole("link", { name: new RegExp(link) })).toBeInTheDocument();
+    }
+    expect(document.title).toBe("Ledger & Reconciliation · LedgerFlow AI");
+    await user.tab();
+    expect(screen.getByRole("link", { name: "Skip to main content" })).toHaveFocus();
+    expect(document.getElementById("main")).not.toBeNull();
+  });
 });

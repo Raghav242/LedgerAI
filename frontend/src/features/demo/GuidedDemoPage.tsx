@@ -95,7 +95,7 @@ const STEPS: Step[] = [
     to: "/performance",
     linkLabel: "Open the Performance Lab",
     defaults: "Recorded Locust runs with 1, 2 and 4 replicas.",
-    expected: "Throughput rises with replicas, at less than linear efficiency; the page says why, from the numbers.",
+    expected: "Throughput rises with replicas at less than linear efficiency, except a hot account, which plateaus on one row lock; the page says why, from the numbers.",
     source: "benchmark",
   },
 ];

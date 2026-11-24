@@ -51,8 +51,12 @@ test("live topology shows observed component health with details", async ({ page
   }
   await page.locator('[data-component="rabbitmq"]').click();
   const details = page.getByTestId("component-details");
-  await expect(details.getByText("Derived", { exact: true })).toBeVisible();
-  await expect(details.getByText(/connection of (event-consumer|outbox-publisher|anomaly-detector)/)).toBeVisible();
+  // Phase 6A: with RABBITMQ_MONITOR_PASSWORD set, the broker is probed independently through the
+  // management API (least-privilege monitoring user); without it, health is derived from workers.
+  await expect(details.getByText(/^(Probed|Derived)$/)).toBeVisible();
+  await expect(
+    details.getByText(/management API, probed by|connection of (event-consumer|outbox-publisher|anomaly-detector)/),
+  ).toBeVisible();
   await page.locator('[data-component="postgres"]').click();
   await expect(details.getByText("Probed", { exact: true })).toBeVisible();
   await shot(page, "topology-live");

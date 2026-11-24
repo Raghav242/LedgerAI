@@ -6,8 +6,9 @@ command endpoint in FastAPI). This process runs on the developer's machine, next
 `docker compose`, and can do exactly four allow-listed things (labctl/infra.py).
 
 Layers of protection:
-  - binds 127.0.0.1 only (not configurable); refuses to start when APP_ENV=production
-    or when PostgreSQL / the API target are not on this machine
+  - binds 127.0.0.1 only (not configurable); refuses to start when APP_ENV=production,
+    when PostgreSQL / the API target are not on this machine, or without an independent
+    LAB_TRAFFIC_SECRET
   - failure experiments are OFF unless started with --enable-failures
   - every request needs the per-start random token (written to .ledgerflow/, injected by
     the Vite dev proxy; browsers cannot read it), a loopback Host header (DNS-rebinding
@@ -33,7 +34,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select, update
 
 from app.api.rate_limit import RateLimits, build_lab_burst_policies, build_policies
-from app.core.config import Settings
+from app.core.config import Settings, lab_secret_problem
 from app.core.database import create_db_engine, create_session_factory
 from app.lab.catalog import failure_definitions
 from app.lab.errors import LabRunInProgressError
@@ -121,6 +122,9 @@ def refuse_unsafe(settings: Settings) -> None:
         raise SystemExit(
             f"Refusing to start: PostgreSQL at {settings.postgres_host!r} is not local"
         )
+    # The controller signs its own lab traffic; there is no fallback key.
+    if (problem := lab_secret_problem(settings)) is not None:
+        raise SystemExit(f"Refusing to start: {problem}")
 
 
 def write_token(path: Path = TOKEN_FILE) -> str:

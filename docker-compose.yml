@@ -1,21 +1,43 @@
 name: ledgerflow
 
+# The same file also runs the ISOLATED benchmark stack (Phase 6A): a separate Compose
+# project (`-p ledgerflow-bench`) with its own containers (STACK_CONTAINER_PREFIX), network
+# (BACKEND_NET), volumes, loopback ports and database. See scripts/stack_control.py (BENCH)
+# and docs/phase-6a-hardening.md. Defaults below are the development stack.
+
 # Shared definition of an API replica. Every replica runs the same image with the same
 # configuration except REPLICA_ID; all state lives in PostgreSQL and Redis.
 x-api: &api
   build: .
   image: ledgerflow-api:local
   restart: unless-stopped
+  # Longer than uvicorn's --timeout-graceful-shutdown (10 s), so in-flight requests can
+  # finish before Docker escalates SIGTERM to SIGKILL. Workers stop at their next loop.
+  stop_grace_period: 15s
   environment: &api-env
     APP_ENV: ${APP_ENV:-development}
     LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ENABLE_DEV_ENDPOINTS: ${ENABLE_DEV_ENDPOINTS:-false}
     EXPOSE_REPLICA_HEADER: ${EXPOSE_REPLICA_HEADER:-true}
+    # The development-only endpoints are refused unless NGINX is published on loopback.
+    GATEWAY_BIND: ${NGINX_BIND:-127.0.0.1}
+    # Independent HMAC key for Experiment Lab traffic; REQUIRED when ENABLE_DEV_ENDPOINTS=true
+    # (the replicas refuse to start without it). Never derived from another credential.
+    LAB_TRAFFIC_SECRET: ${LAB_TRAFFIC_SECRET:-}
+    # uvicorn trusts X-Forwarded-* only from NGINX's fixed address, not from any peer.
+    FORWARDED_ALLOW_IPS: ${BACKEND_NET:-172.28.0}.12
+    # Independent, read-only RabbitMQ probe (live topology): a monitoring-only user whose
+    # permissions match no resource. The API never receives the broker admin credentials.
+    RABBITMQ_MANAGEMENT_URL: http://rabbitmq:15672
+    RABBITMQ_MONITOR_USER: ${RABBITMQ_MONITOR_USER:-ledgerflow_monitor}
+    RABBITMQ_MONITOR_PASSWORD: ${RABBITMQ_MONITOR_PASSWORD:-}
     # Container-to-container traffic uses service names on the internal network.
     POSTGRES_HOST: postgres
     POSTGRES_PORT: "5432"
-    POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
-    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+    # Least-privilege RUNTIME role (Phase 6B): DML only, ledger/audit tables append-only.
+    # Created and granted by the migrate job; the schema-owning role never reaches the API.
+    POSTGRES_USER: ${APP_DB_USER:-ledgerflow_app}
+    POSTGRES_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}
     # Stack tests and benchmarks point the replicas at their own database.
     POSTGRES_DB: ${API_POSTGRES_DB:-${POSTGRES_DB:-ledgerflow}}
     # Per-replica pool: 4 replicas x (5 + 5) = 40 connections max, well under max_connections.
@@ -52,6 +74,7 @@ x-api: &api
   extra_hosts:
     - "redis:${BACKEND_NET:-172.28.0}.10"
     - "postgres:${BACKEND_NET:-172.28.0}.11"
+    - "rabbitmq:${BACKEND_NET:-172.28.0}.13"
     - "jaeger:${BACKEND_NET:-172.28.0}.14"
     - "api-1:${BACKEND_NET:-172.28.0}.21"
     - "api-2:${BACKEND_NET:-172.28.0}.22"
@@ -82,6 +105,11 @@ x-worker: &worker
     RABBITMQ_PORT: "5672"
     RABBITMQ_USER: ${RABBITMQ_USER:-ledgerflow}
     RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set in .env}
+    # Least privilege: workers serve no HTTP, so no development surface, no lab signing key
+    # and no monitoring credentials (they hold their own broker connection).
+    ENABLE_DEV_ENDPOINTS: "false"
+    LAB_TRAFFIC_SECRET: ""
+    RABBITMQ_MONITOR_PASSWORD: ""
     DB_POOL_SIZE: "2"
     DB_MAX_OVERFLOW: "2"
     OUTBOX_BATCH_SIZE: ${OUTBOX_BATCH_SIZE:-100}
@@ -112,7 +140,7 @@ x-worker: &worker
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: ledgerflow-postgres
+    container_name: ${STACK_CONTAINER_PREFIX:-ledgerflow}-postgres
     restart: unless-stopped
     command: ["postgres", "-c", "max_connections=${POSTGRES_MAX_CONNECTIONS:-100}"]
     environment:
@@ -137,7 +165,7 @@ services:
 
   redis:
     image: redis:7.4-alpine
-    container_name: ledgerflow-redis
+    container_name: ${STACK_CONTAINER_PREFIX:-ledgerflow}-redis
     restart: unless-stopped
     # Rate-limit state is ephemeral: no persistence. Every key has a TTL, so under memory
     # pressure evict the soonest-expiring buckets (an evicted bucket simply reads as full).
@@ -168,7 +196,7 @@ services:
   # failure). Thanks to the outbox, an outage only delays events; nothing is lost.
   rabbitmq:
     image: rabbitmq:4.1-management-alpine
-    container_name: ledgerflow-rabbitmq
+    container_name: ${STACK_CONTAINER_PREFIX:-ledgerflow}-rabbitmq
     restart: unless-stopped
     hostname: ledgerflow-rabbitmq  # the data directory is tied to the node name
     environment:
@@ -191,12 +219,70 @@ services:
       retries: 12
       start_period: 20s
 
+  # Creates/updates the least-privilege RabbitMQ monitoring user used by the API's broker
+  # probe (tag `monitoring`, deny-all "^$" permissions). One-shot, idempotent; holds the admin
+  # credentials only for that. Nothing depends on it: the API must not depend on the broker.
+  # With RABBITMQ_MONITOR_PASSWORD unset it exits 0 and the probe stays off.
+  rabbitmq-monitor-setup:
+    <<: *api
+    restart: "no"
+    command: ["python", "-m", "app.events.broker_monitor_setup"]
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      POSTGRES_USER: unused
+      POSTGRES_PASSWORD: unused
+      RABBITMQ_USER: ${RABBITMQ_USER:-ledgerflow}
+      RABBITMQ_PASSWORD: ${RABBITMQ_PASSWORD:?RABBITMQ_PASSWORD must be set in .env}
+      RABBITMQ_MANAGEMENT_URL: http://rabbitmq:15672
+      RABBITMQ_MONITOR_USER: ${RABBITMQ_MONITOR_USER:-ledgerflow_monitor}
+      RABBITMQ_MONITOR_PASSWORD: ${RABBITMQ_MONITOR_PASSWORD:-}
+    extra_hosts:
+      - "rabbitmq:${BACKEND_NET:-172.28.0}.13"
+    volumes: []
+    expose: []
+    healthcheck:
+      disable: true
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # Retention for lab runs and stale heartbeats only (never money or audit rows), as the
+  # runtime role, which cannot delete anything else:
+  #   docker compose --profile maintenance run --rm retention [--dry-run]
+  retention:
+    <<: *api
+    profiles: [maintenance]
+    restart: "no"
+    entrypoint: ["python", "-m", "app.maintenance.retention"]
+    command: []
+    expose: []
+    volumes: []
+    healthcheck:
+      disable: true
+    environment:
+      <<: *api-env
+      ENABLE_DEV_ENDPOINTS: "false"
+      RETENTION_LAB_RUN_DAYS: ${RETENTION_LAB_RUN_DAYS:-30}
+      RETENTION_HEARTBEAT_DAYS: ${RETENTION_HEARTBEAT_DAYS:-7}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # Runs `alembic upgrade head` exactly once per `up`, before any replica starts.
   # Replicas never migrate on their own (no race between replicas, no partial schemas).
+  # Then applies the runtime role's grants (app/core/db_roles.py), so a new table can never
+  # be left without (or with excess) runtime privileges. This job alone holds the
+  # schema-owning MIGRATION role.
   migrate:
     <<: *api
     restart: "no"
-    command: ["alembic", "upgrade", "head"]
+    command: ["sh", "-c", "alembic upgrade head && python -m app.core.db_roles"]
+    environment:
+      <<: *api-env
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      APP_DB_USER: ${APP_DB_USER:-ledgerflow_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?APP_DB_PASSWORD must be set in .env}
     healthcheck:
       disable: true
     depends_on:
@@ -249,6 +335,16 @@ services:
     environment:
       <<: *worker-env
       REPLICA_ID: outbox-publisher   # names its heartbeat row (live topology)
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      # Ordering only, so `up --wait` accepts the finished one-shot job. required: false --
+      # a failed monitoring setup must never stop event delivery.
+      rabbitmq-monitor-setup:
+        condition: service_completed_successfully
+        required: false
 
   # Applies events exactly once (dedup by event id) despite at-least-once delivery.
   event-consumer:
@@ -276,8 +372,8 @@ services:
       CONSUMER_NAME: anomaly-detector
 
   nginx:
-    image: nginx:1.28-alpine
-    container_name: ledgerflow-nginx
+    image: nginx:1.30-alpine
+    container_name: ${STACK_CONTAINER_PREFIX:-ledgerflow}-nginx
     restart: unless-stopped
     ports:
       # The only published API port. Loopback by default; set NGINX_BIND=0.0.0.0 to
@@ -301,11 +397,26 @@ services:
       timeout: 3s
       retries: 10
 
+  # The production frontend build (Phase 6C): static files on an unprivileged NGINX that
+  # proxies /api and /health to the gateway (same origin, no CORS). Loopback only. The
+  # failure lab and benchmarks need the local controller: use `npm run dev` for those.
+  frontend:
+    build: ./frontend
+    image: ledgerflow-frontend:local
+    restart: unless-stopped
+    ports:
+      - "${NGINX_BIND:-127.0.0.1}:${FRONTEND_PORT:-3000}:8080"
+    networks:
+      - backend
+    depends_on:
+      nginx:
+        condition: service_healthy
+
   # Optional trace store (Phase 5C): docker compose --profile observability up -d, with
   # OTEL_ENABLED=true for the API and workers. In-memory, bounded, loopback-only UI.
   jaeger:
     image: jaegertracing/jaeger:2.5.0
-    container_name: ledgerflow-jaeger
+    container_name: ${STACK_CONTAINER_PREFIX:-ledgerflow}-jaeger
     profiles: [observability]
     restart: unless-stopped
     environment:

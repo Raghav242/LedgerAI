@@ -1,31 +1,82 @@
 # LedgerFlow AI
 
-A transaction processing backend for merchants that hold and move virtual money. It is
-built around a PostgreSQL double-entry ledger that never loses or invents money, even
-under heavy concurrency and client retries: every transfer either fully happens exactly
-once or doesn't happen at all.
-
-LedgerFlow AI exists to explore how real payment systems keep balances correct. That
-means row-level locking, durable idempotency, an immutable double-entry ledger, strict
-validation of money amounts and database-enforced invariants, all in a clean, layered Python service that is easy to read and extend.
-It runs as several stateless replicas behind NGINX, with a Redis-backed rate limiter whose
-quota is shared by every replica, and publishes every committed money movement as an event
-through a transactional outbox and RabbitMQ.
-It is aimed at engineers who want a working reference for building a correct money-movement
-service.
-
-A React frontend, the **Distributed Systems Lab**, makes all of this observable: create
-accounts, add simulated funds, send idempotent transfers and watch which replica answered,
-what the rate limiter said, and how the double-entry ledger and reconciliation stay
-consistent. Its **Experiment Lab** runs bounded concurrency, idempotency, rate-limiting and
-load-balancing experiments against the real stack and shows the path every request took.
-Phase 5 adds a **live topology** whose every status carries its evidence, an **event
-pipeline** view, a **request lifecycle explorer** (with optional OpenTelemetry traces), a
-**failure lab** that really stops local services through a separate loopback-only
-controller, an **AI anomaly lab** (Isolation Forest, scored asynchronously) and a
-**performance lab** over recorded Locust benchmarks. All money is simulated virtual USD.
+A virtual-money payments backend that proves its distributed-systems guarantees with
+tests, live experiments and measured benchmarks: concurrency-safe double-entry
+transfers, durable idempotency, horizontal scaling behind NGINX, a global rate limit,
+reliable events through a transactional outbox, and an asynchronous anomaly detector.
+It runs entirely on one laptop with Docker Compose. All money is simulated virtual USD.
 
 ![LedgerFlow AI overview](docs/screenshots/overview.png)
+
+## What it demonstrates
+
+| Area | Guarantee | How | Proof |
+|---|---|---|---|
+| Correctness | no double spend, no lost update | both accounts locked in id order in one PostgreSQL transaction | 100 concurrent $10 transfers from $100 → exactly 10 succeed |
+| Retries | one effect per Idempotency-Key, across replicas and crashes | key claimed in the transfer's transaction; exact response replayed | 20 concurrent copies → 1 transfer; replica killed mid-traffic → 0 duplicates |
+| Ledger | always balances, immutable | double-entry postings; deferred triggers; runtime DB role is INSERT-only on the ledger | reconciliation after every suite, demo and restore drill |
+| Scaling | stateless replicas, one global quota | NGINX round robin (connect-retry only); Redis Lua token bucket, writes fail closed | stack test: exactly one bucket admitted across 2 replicas |
+| Events | no lost or phantom events; exactly-once effects | transactional outbox, leased publisher with fencing, consumer receipts, per-consumer DLQs | broker outage, worker crash and poison-message tests on a real RabbitMQ |
+| AI | asynchronous scoring, honest evaluation | per-family Isolation Forests + velocity features, model-OR-rules hybrid | burst recall 0.00 → 1.00 on unseen accounts; evaluated on fresh seeds and shifted worlds |
+| Operations | reproducible and recoverable | isolated Compose projects for benchmarks and stack tests, verified backups, retention, CI | benchmark left dev data byte-identical; restore drill reconciles |
+
+## Quick start
+
+**Prerequisites:** Docker Desktop, Python 3.12+ and Node 22 (for the dev server and tests).
+
+```powershell
+git clone https://github.com/Raghav242/LedgerAI.git; cd LedgerAI
+Copy-Item .env.example .env        # then set LAB_TRAFFIC_SECRET (required) and RABBITMQ_MONITOR_PASSWORD:
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+docker compose up -d --build --wait  # API, workers, AI model, migrations + DB roles, frontend
+```
+
+| What | Where |
+|---|---|
+| Frontend (production build) | http://127.0.0.1:3000 |
+| API + Swagger UI | http://127.0.0.1:8080/docs |
+| Frontend with the experiment controller (failure lab, benchmarks) | `cd frontend; npm ci; npm run dev` → http://127.0.0.1:5173, plus `python -m labctl --enable-failures` |
+| RabbitMQ management | http://127.0.0.1:15672 |
+
+Details: [Getting started](#getting-started) · [operations runbook](docs/operations.md).
+
+## Measured results
+
+**Benchmarks** (isolated `ledgerflow-bench` project; Locust in a container on the same
+laptop; 32 closed-loop users; 3 runs of 20 s after a 10 s warmup; mean ± std):
+
+| Workload | 1 replica | 2 replicas | 4 replicas | p95 at 1 → 4 | Errors |
+|---|---|---|---|---|---|
+| Read-heavy | 252 ± 5 req/s | 361 ± 45 req/s (72%) | 598 ± 26 req/s (59%) | 213 → 133 ms | 0.00% |
+| Mixed transfers | 68 ± 7 req/s | 118 ± 6 req/s (86%) | 205 ± 5 req/s (75%) | 740 → 443 ms | 0.00% |
+| Hot account (contention) | 54 ± 11 req/s | 102 ± 1 req/s (93%) | 105 ± 4 req/s (48%) | 1333 → 1067 ms | 0.00% |
+
+Reads and independent transfers scale sub-linearly (replica CPU on one shared laptop is
+the first limit, PostgreSQL CPU the next for writes); a **hot account plateaus at ~105
+req/s** because one row lock serializes it. Rate limit under load: 445 admitted vs a
+quota of ~450. Analysis: [case study 3](docs/case-studies/03-scaling-performance.md).
+
+**Anomaly detection** (synthetic data; thresholds chosen on validation; held-out accounts):
+
+| Detector | Precision | Recall | F1 | False positives | Burst recall |
+|---|---|---|---|---|---|
+| v1 Isolation Forest | 0.766 | 0.689 | 0.725 | 0.33% | 0.000 |
+| Rule baseline | 0.972 | 0.982 | 0.977 | 0.04% | 1.000 |
+| v2 model alone | 0.497 | 0.759 | 0.601 | 1.21% | 1.000 |
+| **v2 hybrid (deployed)** | 0.970 | 0.985 | 0.977 | 0.05% | 1.000 |
+
+When bursts are slowed to 0.6–2 s apart, the fixed rule catches 30% of them and the v2
+model 88%. Full analysis, including where the model is weaker: [Phase 6B–6D](docs/phase-6b-6d.md#6b-ai-anomaly-detection).
+
+## Documentation
+
+| | |
+|---|---|
+| Architecture | [HLD](docs/architecture/hld.md) · [LLD + sequence diagrams](docs/architecture/lld.md) · [database](docs/architecture/database.md) · [ADRs](docs/adr/README.md) |
+| Case studies | [financial correctness](docs/case-studies/01-financial-correctness.md) · [event reliability](docs/case-studies/02-event-reliability.md) · [scaling and performance](docs/case-studies/03-scaling-performance.md) |
+| Operations | [runbook](docs/operations.md) · [security hardening (6A)](docs/phase-6a-hardening.md) · [public demo design](docs/public-demo.md) |
+| Phases | [1](docs/phase-1-design.md) · [2](docs/phase-2-design.md) · [3](docs/phase-3-design.md) · [4A](docs/phase-4a-design.md) · [5A](docs/phase-5a-design.md)–[5F](docs/phase-5f-design.md) · [6A](docs/phase-6a-hardening.md) · [6B–6D](docs/phase-6b-6d.md) |
+| Interviews | [interview guide](docs/interview-guide.md) |
 
 ## Features
 
@@ -113,14 +164,24 @@ pip install -e ".[dev]"
 
 # Configure (local, non-secret defaults)
 Copy-Item .env.example .env           # macOS/Linux: cp .env.example .env
+
+# Generate the two local secrets and paste them into .env (never commit .env):
+#   LAB_TRAFFIC_SECRET         REQUIRED while ENABLE_DEV_ENDPOINTS=true (>= 32 chars)
+#   RABBITMQ_MONITOR_PASSWORD  optional; enables the independent broker health probe
+python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
+
+Without `LAB_TRAFFIC_SECRET` the API refuses to start while the development endpoints are
+enabled, and it says why. There is no fallback key. See
+[docs/phase-6a-hardening.md](docs/phase-6a-hardening.md) for the security model.
 
 ### Option A: the full stack (NGINX + 2 replicas + Redis + PostgreSQL + RabbitMQ + workers)
 
 ```powershell
 docker compose up -d --build --wait     # builds the image, migrates once, starts everything
 docker compose ps                       # api-1, api-2, nginx, postgres, redis, rabbitmq,
-                                        # outbox-publisher, event-consumer: healthy
+                                        # outbox-publisher, event-consumer, ai-worker: healthy
+                                        # migrate, rabbitmq-monitor-setup: exited (0)
 ```
 
 The API is at **http://127.0.0.1:8080** (docs at `/docs`). Every response carries an
@@ -134,8 +195,11 @@ docker compose stop api-2                      # run with a single replica
 docker compose logs -f nginx api-1 api-2       # watch routing and requests
 docker compose logs -f outbox-publisher event-consumer   # watch events flow
 docker compose restart event-consumer          # each process restarts independently
-docker compose down                            # stop everything; add -v to delete the data
+docker compose down                            # stop everything; data stays in the volumes
 ```
+
+`docker compose down -v` deletes the `pgdata` and `rabbitmqdata` volumes, which means
+**all** development data. Stopping, restarting and rebuilding keep it.
 
 ### Option B: one local process for debugging
 
@@ -362,10 +426,16 @@ E2E_BENCHMARK=1 npx playwright test e2e/ai-performance.spec.ts  # needs: python 
   broker and delete it afterwards. The broker-outage test starts and restarts its own
   throwaway RabbitMQ container. Crashes are simulated in-process (no ack, rollback) and,
   in the demos, with real process deaths.
-- **Stack tests** temporarily redeploy the Compose stack against a separate database
-  (`ledgerflow_stacktest`) with a deterministic quota, then restore the default stack. They
-  verify that both replicas serve traffic, that the quota is global, that idempotent
-  retries work across replicas, and that state survives killing a replica mid-traffic.
+- **Integration tests run the application as the least-privilege runtime role**, so a
+  missing database grant fails a test; `test_db_roles.py` proves the forbidden operations
+  (rewriting the ledger, TRUNCATE, DDL) are refused.
+- **Stack tests** bring up the ISOLATED Compose project `ledgerflow-stacktest` (its own
+  containers, network, volumes, ports and database) and remove it afterwards; the
+  development stack keeps running. They verify that both replicas serve traffic, that the
+  quota is global, that idempotent retries work across replicas, that state survives
+  killing a replica mid-traffic, that committed money and idempotency records survive
+  PostgreSQL, Redis and replica restarts, per-container secrets, per-consumer dead-letter
+  routing, and a backup restored into a throwaway server.
 
 Demo scripts run against the live API and create their own uniquely named accounts:
 
@@ -387,14 +457,27 @@ Each demo verifies its invariants (including ledger reconciliation) and exits wi
 if one is violated. Demos that stop or reconfigure containers refuse to run against
 anything except `127.0.0.1`/`localhost`, and restore what they stopped.
 
-**Benchmarks** (Locust; redeploy 1/2/4 replicas against a separate `ledgerflow_bench`
-database, then restore the default stack):
+**Benchmarks** (Locust; read-heavy, mixed transfers and a hot-account contention workload,
+each warmed up and repeated) run in a **separate Compose project**, `ledgerflow-bench`, built from
+the same `docker-compose.yml`. It has its own containers, network (`172.29.0.0/24`), volumes
+(so its own PostgreSQL server with database `ledgerflow_bench`), Redis, and loopback ports
+(gateway `127.0.0.1:8180`). The development stack is never redeployed or read, and the
+benchmark project is removed with its volumes afterwards. It runs only the gateway,
+replicas, PostgreSQL and Redis (no broker or workers), so a laptop can run both stacks.
+If memory is tight, stop the dev stack first with `docker compose stop` (its data is kept).
 
 ```powershell
-python benchmarks/run_benchmarks.py --duration 30 --users 64 --replicas 1 2 4
+python benchmarks/run_benchmarks.py --duration 20 --users 32 --replicas 1 2 4 --repeats 3 --warmup 10
+python benchmarks/run_benchmarks.py --duration 10 --users 8 --replicas 1 --skip-quota-run --results-dir $env:TEMP\bench   # quick smoke run, results outside the repo
 ```
 
-Measured results and their analysis are in [docs/phase-3-design.md](docs/phase-3-design.md#13-benchmarks).
+Measured results and their analysis: [case study 3](docs/case-studies/03-scaling-performance.md)
+(earlier single-run results: [Phase 3](docs/phase-3-design.md#13-benchmarks)).
+
+**Operations:** `python scripts/db_backup.py restore-drill` (verified backup into a
+throwaway server), `docker compose --profile maintenance run --rm retention --dry-run`,
+`python -m app.ai.train` / `python -m app.ai.evaluate` (reproducible model and its
+evaluation report). See [docs/operations.md](docs/operations.md).
 
 ## Configuration
 
@@ -402,14 +485,16 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` | *required* | Database credentials (shared with Docker Compose) |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` | *required* | Schema-owning migration role (the `migrate` job, host tooling, tests) |
+| `APP_DB_USER` / `APP_DB_PASSWORD` | `ledgerflow_app` / *required for the stack* | Least-privilege runtime role the replicas and workers connect as (created by the `migrate` job) |
 | `POSTGRES_HOST` / `POSTGRES_PORT` | `127.0.0.1` / `5432` | Database location |
 | `POSTGRES_DB` | `ledgerflow` | Development database |
 | `POSTGRES_TEST_DB` | `ledgerflow_test` | Integration test database |
-| `ENABLE_DEV_ENDPOINTS` | `false` | Enables the funding endpoint and the Experiment Lab |
+| `ENABLE_DEV_ENDPOINTS` | `false` | Enables the funding endpoint and the Experiment Lab. Refused when `APP_ENV=production` or when `NGINX_BIND` is not loopback |
 | `LAB_TARGET_BASE_URL` | `http://127.0.0.1:8000` (stack: `http://nginx:8080`) | Where the lab runner sends measured traffic |
-| `LAB_TRAFFIC_SECRET` | derived from `POSTGRES_PASSWORD` | HMAC key that marks lab traffic (own rate-limit and idempotency scope) |
-| `APP_ENV` | `development` | `development`, `test` or `production` |
+| `LAB_TRAFFIC_SECRET` | *required with dev endpoints* | Independent HMAC key (>= 32 chars) that marks lab traffic (own rate-limit and idempotency scope). Not user authentication; never derived from another credential |
+| `RABBITMQ_MONITOR_USER` / `RABBITMQ_MONITOR_PASSWORD` | `ledgerflow_monitor` / unset | Least-privilege broker monitoring user (tag `monitoring`, `^$` permissions) for the topology's independent RabbitMQ probe; unset = no probe |
+| `APP_ENV` | `development` | `development`, `test` or `production` (production refuses dev endpoints, `EXPOSE_REPLICA_HEADER`, `DB_ECHO`, the memory limiter and fault injection) |
 | `LOG_LEVEL` | `INFO` | Application log level |
 | `TRANSFER_LOCK_TIMEOUT_MS` | `3000` | Max wait for a row lock or an in-flight same-key request |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | `10` / `20` | Pool for a locally run process (Compose replicas: `API_DB_POOL_SIZE` / `API_DB_MAX_OVERFLOW`, default `5` / `5`) |
@@ -419,7 +504,7 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 | `REDIS_CONNECT_TIMEOUT_MS` / `REDIS_SOCKET_TIMEOUT_MS` | `250` / `250` | Upper bound on any rate-limit check |
 | `RATE_LIMIT_WRITE_*` / `RATE_LIMIT_READ_*` | `20,10,1000` / `100,50,1000` | `CAPACITY`, `REFILL_TOKENS`, `REFILL_INTERVAL_MS` of each token bucket |
 | `EXPOSE_REPLICA_HEADER` | `false` (stack: `true`) | Add `X-Served-By` to responses |
-| `NGINX_PORT` / `NGINX_BIND` | `8080` / `127.0.0.1` | Published load-balancer address |
+| `NGINX_PORT` / `NGINX_BIND` | `8080` / `127.0.0.1` | Published load-balancer address (also passed to the replicas as `GATEWAY_BIND`) |
 | `BACKEND_NET` | `172.28.0` | Internal `/24` network for fixed container addresses (change only on collision) |
 | `NGINX_UPSTREAMS` | `2` | Which upstream list NGINX loads (`2` or `4`); must match the deployed replicas |
 | `RABBITMQ_USER` / `RABBITMQ_PASSWORD` | `ledgerflow` / *required for the stack* | Broker credentials (publisher, consumer, broker) |
@@ -434,11 +519,15 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 | `OTEL_ENABLED` | `false` | Export OpenTelemetry spans (use with `--profile observability`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` / `JAEGER_QUERY_URL` | stack: `http://jaeger:4318` / `http://jaeger:16686` | Where spans go and where the UI reads traces back |
 | `BENCHMARK_RESULTS_DIR` | `benchmarks/results` | Recorded benchmark JSON read by the Performance Lab (mounted read-only in the stack) |
+| `RETENTION_LAB_RUN_DAYS` / `RETENTION_HEARTBEAT_DAYS` | `30` / `7` | Retention job: finished lab runs and stale heartbeat rows (never financial or audit data) |
+| `FRONTEND_PORT` | `3000` | Published port of the containerized frontend |
 
 ## Notes and limitations
 
-- **The funding endpoint creates money from nothing** and is meant for local development only. It is disabled by default, and the app refuses to start if it is enabled while `APP_ENV=production`.
-- **No authentication yet.** All callers share one fixed demo identity, which is also the scope of every Idempotency-Key. The scope is set by the server, never by the caller.
+- **The funding endpoint creates money from nothing** and is meant for local development only. It is disabled by default, and the app refuses to start if it is enabled while `APP_ENV=production` or while the gateway is published on a non-loopback address.
+- **Per-consumer DLQs depend on a broker policy** each consumer applies through the management API; without it, broker dead letters are kept in `ledgerflow.events.unrouted.dlq` (never dropped).
+- **The deployed anomaly hybrid's threshold** was chosen on validation data, so it inherits only part of the model's robustness to slowed bursts (0.44 vs the model's 0.88).
+- **No authentication yet: not deployable publicly.** All callers share one fixed demo identity, which is also the scope of every Idempotency-Key. The scope is set by the server, never by the caller. See [the Phase 6A hardening notes](docs/phase-6a-hardening.md#8-required-work-before-public-deployment) for what a public deployment still needs.
 - **Idempotency keys are kept indefinitely**; there is no retention job yet.
 - **Hot accounts serialize.** Transfers from the same account wait for each other's row lock, which bounds per-account throughput no matter how many replicas run.
 - **Scaling is bounded by shared dependencies.** All replicas share one PostgreSQL primary and one Redis; on a single machine they also share its CPUs. See the measured benchmarks.
@@ -449,9 +538,9 @@ Settings are read from environment variables or a `.env` file. See [`.env.exampl
 - **Events start with migration `0003`.** Transfers committed before it have no events. Published outbox rows and receipts are kept indefinitely (no retention job yet).
 - **Fixed container IPs are a local workaround.** They avoid two Docker Desktop DNS problems measured during development (slow lookups for stopped containers, stale upstream addresses after restarts). Production systems use dynamic addresses with service discovery and readiness-based load-balancer membership instead; see [the design notes](docs/phase-3-design.md#fixed-ips-are-a-local-workaround-not-a-production-pattern).
 - **Phase 1 data:** migration `0002` backfills existing transfers exactly. Balances from unrecorded Phase 1 funding become one labelled `legacy_opening_balance` entry per account, and the migration aborts if a balance cannot be explained.
-- **Observability is development-only and partly second-hand.** RabbitMQ health is derived from the workers (the API never connects to the broker); NGINX emits no spans; which replica served a historical transfer is not stored. See [the 5C limitations](docs/phase-5c-design.md#7-limitations).
-- **The AI model is trained and evaluated on synthetic data only** (compressed clock, source-account history only). It misses rapid bursts that the rule baseline catches, and its score is not a probability. See [the 5E limitations](docs/phase-5e-design.md#17-limitations).
-- **The experiment controller drives the local Compose stack only.** While a benchmark runs, the stack serves the separate benchmark database.
+- **Observability is development-only and partly second-hand.** RabbitMQ health comes from an independent management-API probe when `RABBITMQ_MONITOR_PASSWORD` is set (otherwise from the workers' reports; the API never speaks AMQP); NGINX emits no spans; which replica served a historical transfer is not stored. See [the 5C limitations](docs/phase-5c-design.md#7-limitations).
+- **The AI model is trained and evaluated on synthetic data only** (compressed clock, source-account history only), and its score is not a probability. iforest-v2 fixed v1's blind spot for rapid bursts; the rule baseline, which restates the synthetic generator, is still as strong in-distribution. See [Phase 6B–6D](docs/phase-6b-6d.md#6b-ai-anomaly-detection).
+- **The experiment controller drives the local Compose stack only.** Benchmarks run in the separate `ledgerflow-bench` project and never touch the development stack; they still share this machine's CPUs, so one experiment or benchmark runs at a time.
 - **Experiment Lab is development-only and single-run.** Runs execute inside the API replica that accepted them (sharing its CPU and pool), one at a time across the stack; the flow diagrams are derived from responses, not traced; `lab-…` accounts are never deleted. See [the design notes](docs/phase-5b-design.md#9-known-limitations).
 - **Frontend lists are bounded.** The account picker shows the newest 100 accounts (no search endpoint), and list endpoints return no total counts, so history uses previous/next pagination.
 - USD only.

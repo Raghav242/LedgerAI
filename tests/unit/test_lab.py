@@ -224,3 +224,19 @@ def test_per_replica_counters_admit_capacity_per_replica() -> None:
 def test_the_api_refuses_to_start_infrastructure_experiments(experiment: str) -> None:
     with pytest.raises(ValidationError):
         RUN_CREATE.validate_python({"experiment": experiment})
+
+
+def test_anomaly_summary_states_the_models_own_comparison_under_the_hybrid() -> None:
+    """Phase 6B: a hybrid verdict can come from the rules while the model's score is below
+    its threshold; the summary must not claim score >= threshold then."""
+    from app.lab.experiments.anomaly import _summary
+
+    rules_only = {"is_anomaly": True, "score": 0.51, "threshold": 0.998, "rule_flags": ["< 1 s"]}
+    text = _summary("rapid_burst", rules_only, intent=True)
+    assert text.startswith("The detector flagged this transfer")
+    assert "model score 0.5100 < threshold 0.9980; rule baseline fired" in text
+    both = {"is_anomaly": True, "score": 0.9991, "threshold": 0.998, "rule_flags": ["8x"]}
+    assert "0.9991 ≥ threshold 0.9980" in _summary("large_amount", both, intent=True)
+    neither = {"is_anomaly": False, "score": 0.4, "threshold": 0.998, "rule_flags": []}
+    assert "did not flag" in _summary("normal", neither, intent=False)
+    assert "rule baseline did not fire" in _summary("normal", neither, intent=False)

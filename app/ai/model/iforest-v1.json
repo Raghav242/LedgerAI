@@ -118,5 +118,6 @@
     "Compressed clock: seconds stand in for hours or days so lab scenarios run live.",
     "Only the source account's own history is used (no counterparties, devices, geography).",
     "The score is relative unusualness, not a probability."
-  ]
+  ],
+  "artifact_sha256": "39b32582021d22937cc0e53375145566bc52238e994b8f2b5e41f33a3ddaa95c"
 }

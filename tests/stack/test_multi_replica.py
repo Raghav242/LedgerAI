@@ -71,7 +71,9 @@ def test_rate_limit_is_global_across_replicas(stack: Stack, fresh_quota: None) -
         source, destination = _account(http, funded=100_000), _account(http)
     from stack_control import reset_rate_limits
 
-    reset_rate_limits()  # setup spent write tokens; start the measurement with a full bucket
+    reset_rate_limits(
+        stack.project.redis_url
+    )  # setup spent write tokens; start the measurement with a full bucket
     keys = [str(uuid.uuid4()) for _ in range(100)]
 
     def send(key: str) -> httpx.Response:
@@ -130,7 +132,7 @@ def test_killing_a_replica_mid_traffic_does_not_corrupt_state(
         source, destination = _account(http, funded=1_000_000), _account(http)
     from stack_control import reset_rate_limits
 
-    reset_rate_limits()
+    reset_rate_limits(stack.project.redis_url)
     keys = [str(uuid.uuid4()) for _ in range(40)]
     done = Counter()
     lock = threading.Lock()
@@ -157,7 +159,9 @@ def test_killing_a_replica_mid_traffic_does_not_corrupt_state(
     with ThreadPoolExecutor(max_workers=20) as pool:
         futures = [pool.submit(send, k) for k in keys]
         assert half_done.wait(60)
-        subprocess.run(["docker", "kill", "ledgerflow-api-2-1"], check=True, capture_output=True)
+        subprocess.run(
+            ["docker", "kill", stack.container("api-2")], check=True, capture_output=True
+        )
         statuses = [f.result(timeout=120) for f in futures]
 
     assert statuses == [201] * 40
@@ -177,17 +181,17 @@ def test_killing_a_replica_mid_traffic_does_not_corrupt_state(
 
     # `docker kill` counts as a manual stop, so the restart policy does not apply (a real
     # process crash would be restarted automatically). Recover explicitly.
-    from stack_control import compose, wait_until_served_only_by
+    from stack_control import wait_until_served_only_by
 
-    compose("start", "api-2")
+    stack.compose("start", "api-2")
     wait_until_served_only_by(stack.base_url, {"api-1", "api-2"}, timeout=60)
 
 
 @pytest.mark.parametrize("path", ["/health/live", "/api/v1/accounts?limit=1"])
 def test_requests_keep_working_with_one_replica_stopped(stack: Stack, path: str) -> None:
-    from stack_control import compose, wait_until_served_only_by
+    from stack_control import wait_until_served_only_by
 
-    compose("stop", "api-2")
+    stack.compose("stop", "api-2")
     try:
         with _client(stack) as http:
             statuses = [http.get(path).status_code for _ in range(10)]
@@ -195,5 +199,5 @@ def test_requests_keep_working_with_one_replica_stopped(stack: Stack, path: str)
         assert statuses == [200] * 10  # connection errors to api-2 are retried by NGINX
         assert replicas == {"api-1"}
     finally:
-        compose("start", "api-2")
+        stack.compose("start", "api-2")
         wait_until_served_only_by(stack.base_url, {"api-1", "api-2"}, timeout=60)

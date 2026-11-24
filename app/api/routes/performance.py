@@ -44,6 +44,18 @@ class BenchmarkResult(BaseModel):
     transfer_rps: float | None = None
     transfers_admitted: int | None = None
     notes: list[str] = []
+    # Phase 6C (absent in older result files): memory, contention and variability over
+    # repeated runs. A summary row's rps/p50/p95/p99 are means over `repeats` runs.
+    mem_mib: dict[str, float] = {}
+    lock_timeouts: int = 0
+    run: int | None = None
+    repeats: int | None = None
+    rps_std: float | None = None
+    rps_min: float | None = None
+    rps_max: float | None = None
+    p95_std: float | None = None
+    p99_std: float | None = None
+    scaling_efficiency: float | None = None
 
 
 class BenchmarkRun(BaseModel):
@@ -51,6 +63,7 @@ class BenchmarkRun(BaseModel):
     started_at: datetime | None
     meta: dict[str, Any]
     results: list[BenchmarkResult]
+    runs: list[BenchmarkResult] = []  # every repeat behind the summary rows (Phase 6C)
     error: str | None = None
 
 
@@ -86,6 +99,7 @@ def read_runs(directory: Path) -> BenchmarkList:
                     started_at=_started(run_id),
                     meta=payload.get("meta", {}),
                     results=[BenchmarkResult(**r) for r in payload.get("results", [])],
+                    runs=[BenchmarkResult(**r) for r in payload.get("runs", [])],
                 )
             )
         except (OSError, ValueError, TypeError) as exc:

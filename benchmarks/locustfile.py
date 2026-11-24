@@ -2,6 +2,7 @@
 
     locust -f benchmarks/locustfile.py ReadHeavyUser --host http://127.0.0.1:8080
     locust -f benchmarks/locustfile.py MixedTransferUser --host http://127.0.0.1:8080
+    locust -f benchmarks/locustfile.py HotAccountUser --host http://127.0.0.1:8080
 
 Users are closed-loop (no think time): each sends its next request as soon as the
 previous one returns, so throughput measures the system, not a configured arrival rate.
@@ -135,3 +136,38 @@ class MixedTransferUser(_LedgerUser):
             catch_response=True,
         ) as response:
             _check(response)
+
+
+class HotAccountUser(_LedgerUser):
+    """Workload C (Phase 6C): contention. EVERY user debits the same source account (the
+    first provisioned pair's first account) into its own destination, so each transfer must
+    take that one row lock: transfers serialize no matter how many replicas run. Lock waits
+    beyond TRANSFER_LOCK_TIMEOUT_MS surface as 503 CONCURRENCY_CONFLICT (retryable; nothing
+    committed) and are counted apart from real errors."""
+
+    def on_start(self) -> None:
+        if _PAIRS:
+            self.hot = _PAIRS[0][0]
+            self.destination = _next_pair(self)[1]
+        else:
+            self.hot = self._new_account(funded=FUNDING_MINOR)
+            self.destination = self._new_account()
+
+    @task
+    def transfer_from_hot_account(self) -> None:
+        with self.client.post(
+            "/api/v1/transfers",
+            json={
+                "source_account_id": self.hot,
+                "destination_account_id": self.destination,
+                "amount_minor": 1,
+                "currency": "USD",
+            },
+            headers={"Idempotency-Key": str(uuid.uuid4())},
+            name="POST /transfers (hot account)",
+            catch_response=True,
+        ) as response:
+            if response.status_code == 503 and "CONCURRENCY_CONFLICT" in response.text:
+                response.failure("503 lock timeout")
+            else:
+                _check(response, expected=(201,))

@@ -1,0 +1,10 @@
+# Pinned test/lint tooling (CI and local). Install together with the runtime locks:
+#   pip install -r requirements.lock -r requirements-ai.lock -r requirements-dev.lock
+#   pip install --no-deps -e .
+# packaging is pinned in requirements.lock. colorama is Windows-only (pytest pulls it there).
+iniconfig==2.3.1
+pluggy==1.7.0
+Pygments==2.21.0
+pytest==9.2.0
+ruff==0.17.3
+colorama==0.4.6; sys_platform == "win32"

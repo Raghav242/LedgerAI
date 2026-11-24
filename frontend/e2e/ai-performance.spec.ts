@@ -3,8 +3,9 @@ import path from "node:path";
 
 /**
  * Phase 5E against the REAL stack (including the ai-worker). The AI scenarios create their
- * own lab accounts with simulated money. The benchmark test redeploys the stack against the
- * separate benchmark database, so it is OPT-IN: E2E_BENCHMARK=1 with
+ * own lab accounts with simulated money. The benchmark test starts the isolated Compose
+ * project ledgerflow-bench (its own containers and database) and takes minutes, so it is
+ * OPT-IN: E2E_BENCHMARK=1 with
  * `python -m labctl --enable-benchmarks` running.
  */
 const SHOTS = process.env.SCREENSHOTS === "1";
@@ -41,7 +42,7 @@ for (const scenario of [
     const prediction = page.getByTestId("ai-prediction");
     await expect(prediction).toBeVisible({ timeout: 90_000 });
     await expect(prediction).toHaveAttribute("data-anomaly", /true|false/);
-    await expect(page.getByTestId("ai-summary")).toContainText(/The model (flagged|did not flag)/);
+    await expect(page.getByTestId("ai-summary")).toContainText(/The detector (flagged|did not flag) this transfer \(model score [\d.]+ (≥|<) threshold [\d.]+; rule baseline (fired|did not fire)\)/);
     // The event path: published and consumed by the AI worker, from persisted state.
     await prediction.getByRole("button", { name: /Event path/ }).click();
     await expect(page.locator('[data-stage="consume:anomaly-detector"]')).toHaveAttribute("data-evidence", "observed", { timeout: 20_000 });
@@ -62,7 +63,7 @@ test("performance lab charts the recorded benchmarks", async ({ page }) => {
 });
 
 test("a bounded benchmark started from the UI runs on the isolated database and is recorded", async ({ page }) => {
-  test.skip(process.env.E2E_BENCHMARK !== "1", "redeploys the stack: set E2E_BENCHMARK=1 and run python -m labctl --enable-benchmarks");
+  test.skip(process.env.E2E_BENCHMARK !== "1", "starts the benchmark stack: set E2E_BENCHMARK=1 and run python -m labctl --enable-benchmarks");
   test.setTimeout(900_000);
   await page.goto("/performance");
   await expect(page.getByTestId("benchmark-source")).toBeVisible(); // lazy route loaded

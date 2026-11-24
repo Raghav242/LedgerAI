@@ -17,7 +17,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useControllerStatus } from "@/features/lab/hooks";
 import type { components } from "@/types/openapi.gen";
-import { WORKLOAD_LABEL, insights, scalingRows, workloads, type BenchmarkRun } from "./insights";
+import { WORKLOAD_LABEL, insights, scalingRows, withSpread, workloads, type BenchmarkRun } from "./insights";
 
 type BenchmarkList = components["schemas"]["BenchmarkList"];
 
@@ -33,6 +33,7 @@ interface BenchmarkStatus {
 const SERIES = [
   { workload: "ReadHeavyUser", color: "var(--chart-1)" },
   { workload: "MixedTransferUser", color: "var(--chart-3)" },
+  { workload: "HotAccountUser", color: "var(--chart-2)" },
 ];
 
 function describeRun(run: BenchmarkRun): string {
@@ -110,9 +111,9 @@ function MetricsTable({ run, workload }: { run: BenchmarkRun; workload: string }
           {rows.map((r) => (
             <TableRow key={r.label}>
               <TableCell>{r.replicas}</TableCell>
-              <TableCell className="text-right tabular-nums">{Math.round(r.rps)} req/s</TableCell>
+              <TableCell className="text-right tabular-nums">{withSpread(r.rps, r.rps_std)} req/s</TableCell>
               <TableCell className="text-right tabular-nums">{Math.round(r.p50_ms)} ms</TableCell>
-              <TableCell className="text-right tabular-nums">{Math.round(r.p95_ms)} ms</TableCell>
+              <TableCell className="text-right tabular-nums">{withSpread(r.p95_ms, r.p95_std, "")} ms</TableCell>
               <TableCell className="text-right tabular-nums">{Math.round(r.p99_ms)} ms</TableCell>
               <TableCell className="text-right tabular-nums">{r.error_pct.toFixed(2)}%</TableCell>
             </TableRow>
@@ -249,12 +250,12 @@ function NewBenchmark({ onFinished }: { onFinished: () => void }) {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <ShieldAlert className="size-4 text-warning" /> Redeploy the local stack for a benchmark?
+              <ShieldAlert className="size-4 text-warning" /> Run an isolated benchmark stack?
             </DialogTitle>
             <DialogDescription>
-              The existing harness redeploys this machine's stack against the separate database ledgerflow_bench, runs Locust for {form.duration_s} s per
-              configuration ({replicaCount * 2 + (form.quota ? 1 : 0)} runs), then restores the default stack. Expect several minutes; no other experiment
-              can run meanwhile. Your development data is not used.
+              The harness starts a separate, isolated benchmark stack (Compose project ledgerflow-bench with its own database), runs Locust for {form.duration_s} s per
+              configuration ({replicaCount * 2 + (form.quota ? 1 : 0)} runs), then removes it. Expect several minutes; no other experiment
+              can run meanwhile. Your development stack and data are not touched.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -377,12 +378,25 @@ export function PerformanceLabPage() {
             <CardContent className="space-y-2 p-4">
               <h2 className="font-semibold">What did we learn?</h2>
               <ul className="space-y-1.5 text-sm" data-testid="insights">
-                {insights(run).map((i) => (
-                  <li key={i.text} className={i.tone === "warning" ? "text-warning" : undefined}>
-                    {i.text}
-                  </li>
-                ))}
+                {insights(run)
+                  .filter((i) => !i.detail)
+                  .map((i) => (
+                    <li key={i.text} className={i.tone === "warning" ? "text-warning" : undefined}>
+                      {i.text}
+                    </li>
+                  ))}
               </ul>
+              {insights(run).some((i) => i.detail) && (
+                <Disclosure title="Latency, connections and run-to-run spread" meta={String(insights(run).filter((i) => i.detail).length)}>
+                  <ul className="space-y-1.5 text-sm text-muted-foreground" data-testid="insight-details">
+                    {insights(run)
+                      .filter((i) => i.detail)
+                      .map((i) => (
+                        <li key={i.text}>{i.text}</li>
+                      ))}
+                  </ul>
+                </Disclosure>
+              )}
               <p className="text-xs text-muted-foreground">
                 Derived only from the numbers above. Everything ran on one machine, so the replicas, PostgreSQL, Redis, NGINX and the load generator
                 share its CPUs: more replicas cannot scale linearly here.

@@ -14,17 +14,21 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.database import CONNECT_TIMEOUT_SECONDS, create_db_engine, create_session_factory
+from app.core.db_roles import apply_runtime_role
+from app.core.db_roles import verify as verify_runtime_role
 from app.main import create_app
 from tests.integration.messaging import event_settings, rabbit_available  # noqa: F401
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAFE_DB_NAME = re.compile(r"^[a-z_][a-z0-9_]*_test$")
+TEST_LAB_SECRET = SecretStr("integration-tests-only-lab-signing-key-0123456789")
 UNLIMITED_RATE_LIMITS = {
     f"rate_limit_{kind}_{field}": value
     for kind in ("read", "write")
@@ -42,8 +46,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.integration)
 
 
+# Test-only least-privilege runtime role (cluster-wide name, so never the dev runtime role:
+# applying it would change that role's password). Granted on the test database only.
+TEST_RUNTIME_ROLE = "ledgerflow_app_test"
+TEST_RUNTIME_PASSWORD = SecretStr("integration-tests-only-runtime-role-password")
+
+
 @pytest.fixture(scope="session")
-def test_settings() -> Settings:
+def owner_settings() -> Settings:
+    """The MIGRATION role on the test database: Alembic, TRUNCATE, direct test setup."""
     base = Settings()  # type: ignore[call-arg]
     test_db = base.postgres_test_db
     # Hard safety guard: refuse to run destructive fixtures against anything that
@@ -59,6 +70,9 @@ def test_settings() -> Settings:
             "postgres_db": test_db,
             "app_env": "test",
             "enable_dev_endpoints": True,
+            # The lab requires an independent signing key; use the configured one, or a
+            # test-only value when .env has none (dev endpoints disabled there).
+            "lab_traffic_secret": base.lab_traffic_secret or TEST_LAB_SECRET,
             # Business-logic tests are not about rate limiting: use a per-process limiter
             # with the largest allowed quota so it never interferes. Rate-limit tests
             # build their own apps with a real Redis limiter (tests/integration/test_rate_limit*).
@@ -100,19 +114,48 @@ def _alembic_config(settings: Settings) -> Config:
 
 
 @pytest.fixture(scope="session")
-def alembic_config(test_settings: Settings) -> Config:
-    return _alembic_config(test_settings)
+def alembic_config(owner_settings: Settings) -> Config:
+    return _alembic_config(owner_settings)
+
+
+def apply_test_runtime_role(engine: Engine) -> None:
+    """Exactly what the migrate job does after every `alembic upgrade head` in the stack.
+
+    Grants belong to tables, so anything that rebuilds the schema (test_migrations) must
+    call this again afterwards.
+    """
+    with engine.begin() as conn:
+        apply_runtime_role(
+            conn,
+            role=TEST_RUNTIME_ROLE,
+            password=TEST_RUNTIME_PASSWORD.get_secret_value(),
+            database=conn.execute(text("SELECT current_database()")).scalar_one(),
+        )
+        verify_runtime_role(conn, TEST_RUNTIME_ROLE)
 
 
 @pytest.fixture(scope="session")
-def engine(test_settings: Settings, alembic_config: Config) -> Iterator[Engine]:
-    _ensure_database_exists(test_settings)
+def engine(owner_settings: Settings, alembic_config: Config) -> Iterator[Engine]:
+    _ensure_database_exists(owner_settings)
     command.downgrade(alembic_config, "base")
     command.upgrade(alembic_config, "head")
-    engine = create_db_engine(test_settings)
-    assert engine.url.database == test_settings.postgres_test_db
+    engine = create_db_engine(owner_settings)
+    assert engine.url.database == owner_settings.postgres_test_db
+    apply_test_runtime_role(engine)
     yield engine
     engine.dispose()
+
+
+@pytest.fixture(scope="session")
+def test_settings(owner_settings: Settings, engine: Engine) -> Settings:
+    """What the application under test connects as: the least-privilege RUNTIME role.
+
+    Every app, consumer, publisher and lab runner built from these settings therefore
+    runs with production grants, so a missing (or excess) privilege fails a test.
+    """
+    return owner_settings.model_copy(
+        update={"postgres_user": TEST_RUNTIME_ROLE, "postgres_password": TEST_RUNTIME_PASSWORD}
+    )
 
 
 def reset_database(engine: Engine) -> None:

@@ -7,11 +7,17 @@ status to escape its quota. So the runner attaches an HMAC token:
 
     X-Lab-Traffic: v1.<run id hex>.<mode>.<hex HMAC-SHA256(secret, "v1.<run>.<mode>")>
 
-Every replica shares the secret (LAB_TRAFFIC_SECRET, or a key derived from
-POSTGRES_PASSWORD, which all replicas already share). The token never leaves the
-server side: it is created by the runner and consumed by a replica. A missing, malformed
-or forged token is ignored and the request is treated as the ordinary demo merchant, so
-ordinary clients see no behaviour change at all.
+Every replica shares the secret LAB_TRAFFIC_SECRET: an independently generated random
+value that is REQUIRED whenever the lab is enabled. It is never derived from another
+credential (an earlier version derived it from POSTGRES_PASSWORD, whose development
+default is public, so anyone could forge tokens). The token never leaves the server side:
+it is created by the runner and consumed by a replica. A missing, malformed or forged
+token is ignored and the request is treated as the ordinary demo merchant, so ordinary
+clients see no behaviour change at all.
+
+This is NOT user authentication. A valid token proves only that the request was minted
+by a lab runner holding the secret; it selects a separate rate-limit and idempotency
+scope for simulated traffic and grants no other privilege.
 """
 
 import hashlib
@@ -19,13 +25,16 @@ import hmac
 import uuid
 from typing import cast, get_args
 
-from app.core.config import Settings
+from app.core.config import Settings, lab_secret_problem
 from app.core.principal import LabRateMode, Principal
 
 LAB_TRAFFIC_HEADER = "X-Lab-Traffic"
 _VERSION = "v1"
-_DERIVATION_LABEL = b"ledgerflow-lab-traffic-v1"
 _MODES = frozenset(get_args(LabRateMode))
+
+
+class LabSigningNotConfiguredError(RuntimeError):
+    """The lab is enabled without a usable, independent LAB_TRAFFIC_SECRET."""
 
 
 def lab_scope(run_id: uuid.UUID) -> str:
@@ -43,10 +52,13 @@ class LabTrafficSigner:
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "LabTrafficSigner":
-        if settings.lab_traffic_secret is not None:
-            return cls(settings.lab_traffic_secret.get_secret_value().encode())
-        password = settings.postgres_password.get_secret_value().encode()
-        return cls(hmac.new(password, _DERIVATION_LABEL, hashlib.sha256).digest())
+        # Checked again here (not only in the Settings validator): Settings built with
+        # model_copy skip validation, and there is deliberately no fallback key.
+        problem = lab_secret_problem(settings)
+        if problem is not None:
+            raise LabSigningNotConfiguredError(problem)
+        assert settings.lab_traffic_secret is not None
+        return cls(settings.lab_traffic_secret.get_secret_value().encode())
 
     def _mac(self, run_hex: str, mode: str) -> str:
         message = f"{_VERSION}.{run_hex}.{mode}".encode()

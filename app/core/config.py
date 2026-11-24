@@ -1,10 +1,64 @@
+import ipaddress
 import socket
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import URL
+
+# Lab traffic signing key: an independent random secret, never derived from another
+# credential. 32 characters is what `secrets.token_urlsafe(24)` produces; the documented
+# generator (token_urlsafe(32)) gives 43.
+LAB_SECRET_MIN_LENGTH = 32
+LAB_SECRET_HINT = (
+    'generate one with: python -c "import secrets; print(secrets.token_urlsafe(32))" '
+    "and set LAB_TRAFFIC_SECRET in .env"
+)
+
+
+def is_loopback_host(host: str) -> bool:
+    """True for addresses only reachable from this machine (127.0.0.0/8, ::1, localhost)."""
+    host = host.strip().strip("[]")
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def lab_secret_problem(settings: "Settings") -> str | None:
+    """Why the configured lab signing secret is unusable, or None if it is acceptable.
+
+    Shared by the Settings validator and LabTrafficSigner.from_settings, so a Settings
+    object built with model_copy (which skips validators) is still checked before use.
+    """
+    if settings.lab_traffic_secret is None:
+        return f"LAB_TRAFFIC_SECRET is not set; {LAB_SECRET_HINT}"
+    value = settings.lab_traffic_secret.get_secret_value()
+    if len(value) < LAB_SECRET_MIN_LENGTH:
+        return (
+            f"LAB_TRAFFIC_SECRET must be at least {LAB_SECRET_MIN_LENGTH} characters; "
+            f"{LAB_SECRET_HINT}"
+        )
+    if len(set(value)) < 10:
+        return (
+            "LAB_TRAFFIC_SECRET looks like a placeholder (too few distinct characters); "
+            f"{LAB_SECRET_HINT}"
+        )
+    others = [
+        settings.postgres_password,
+        settings.app_db_password,
+        settings.rabbitmq_password,
+        settings.rabbitmq_monitor_password,
+    ]
+    if any(other is not None and other.get_secret_value() == value for other in others):
+        return (
+            "LAB_TRAFFIC_SECRET must be independent of every other credential "
+            f"(it equals a database or broker password); {LAB_SECRET_HINT}"
+        )
+    return None
 
 
 class Settings(BaseSettings):
@@ -26,8 +80,15 @@ class Settings(BaseSettings):
     postgres_port: int = 5432
     postgres_db: str = "ledgerflow"
     postgres_test_db: str = "ledgerflow_test"
+    # The role this process connects as. In the Compose stack the API replicas and workers
+    # get the least-privilege RUNTIME role here (APP_DB_USER/APP_DB_PASSWORD), the migrate
+    # job the schema-owning MIGRATION role.
     postgres_user: str
     postgres_password: SecretStr
+    # Runtime role managed by `python -m app.core.db_roles` (run by the migrate job with the
+    # migration role's credentials). Unset password = single-role mode (no runtime role).
+    app_db_user: str = Field(default="ledgerflow_app", pattern=r"^[a-z_][a-z0-9_]{0,62}$")
+    app_db_password: SecretStr | None = None
 
     # Connection pool, PER PROCESS (each API replica has its own). Requests beyond
     # pool_size + max_overflow wait up to pool_timeout for a free connection; that queueing
@@ -112,9 +173,26 @@ class Settings(BaseSettings):
     lab_target_base_url: str = Field(
         default="http://127.0.0.1:8000", pattern=r"^https?://[A-Za-z0-9.\-]+(:\d+)?$"
     )
-    # Signs lab traffic so replicas give it its own rate-limit and idempotency scope. When
-    # unset, a key is derived from POSTGRES_PASSWORD, which every replica already shares.
+    # Signs lab traffic so replicas give it its own rate-limit and idempotency scope.
+    # REQUIRED (an independent random value, >= 32 characters) whenever
+    # ENABLE_DEV_ENDPOINTS=true; never derived from another credential. It authenticates
+    # the lab RUNNER to the replicas, not any user: a valid token only selects a separate
+    # rate-limit/idempotency scope for simulated traffic.
     lab_traffic_secret: SecretStr | None = None
+    # Host address NGINX publishes the API on (Compose passes NGINX_BIND). The
+    # development-only surface is refused unless this is a loopback address.
+    gateway_bind: str = "127.0.0.1"
+
+    # --- RabbitMQ health probe (Phase 6A, read-only, least privilege) -------------------
+    # The API never gets broker credentials. It may probe the management API's health
+    # checks with a separate user that has only the `monitoring` tag and deny-all ("^$")
+    # permissions (it cannot publish, consume or declare). Unset = no independent probe;
+    # the topology then falls back to what the workers report.
+    rabbitmq_management_url: str | None = Field(
+        default=None, pattern=r"^https?://[A-Za-z0-9.\-]+(:\d+)?$"
+    )
+    rabbitmq_monitor_user: str = Field(default="ledgerflow_monitor", max_length=64)
+    rabbitmq_monitor_password: SecretStr | None = None
 
     # --- Observability (Phase 5C) ------------------------------------------------------
     # Live topology: how many replicas NGINX routes to (api-1 .. api-N, matching
@@ -127,6 +205,10 @@ class Settings(BaseSettings):
         default=["outbox-publisher", "event-consumer"], max_length=10
     )
     heartbeat_interval_seconds: float = Field(default=5, gt=0, le=60)
+    # Retention (Phase 6B, app/maintenance/retention.py): lab bookkeeping and telemetry
+    # only; financial and audit tables are never pruned.
+    retention_lab_run_days: int = Field(default=30, ge=1, le=3650)
+    retention_heartbeat_days: int = Field(default=7, ge=1, le=3650)
     # Performance Lab: where the benchmark harness writes its results (read-only here).
     benchmark_results_dir: str = "benchmarks/results"
     # Optional OpenTelemetry tracing (exported over OTLP/HTTP, e.g. to Jaeger).
@@ -137,10 +219,43 @@ class Settings(BaseSettings):
     # Jaeger query API used to show a trace in the UI (read-only). Unset = no trace view.
     jaeger_query_url: str | None = Field(default=None, pattern=r"^https?://[A-Za-z0-9.\-]+(:\d+)?$")
 
+    @field_validator(
+        "lab_traffic_secret",
+        "app_db_password",
+        "rabbitmq_monitor_password",
+        "rabbitmq_management_url",
+        "jaeger_query_url",
+        mode="before",
+    )
+    @classmethod
+    def _empty_means_unset(cls, value: object) -> object:
+        # Compose passes `VAR: ${VAR:-}`, i.e. an empty string, for an unset variable.
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        if isinstance(value, SecretStr) and value.get_secret_value().strip() == "":
+            return None
+        return value
+
     @model_validator(mode="after")
     def _forbid_unsafe_production_settings(self) -> "Settings":
         if self.app_env == "production" and self.enable_dev_endpoints:
             raise ValueError("ENABLE_DEV_ENDPOINTS must be false when APP_ENV=production")
+        if self.enable_dev_endpoints and not is_loopback_host(self.gateway_bind):
+            raise ValueError(
+                f"ENABLE_DEV_ENDPOINTS must be false when the gateway is published on "
+                f"{self.gateway_bind!r} (NGINX_BIND): the development-only endpoints mint "
+                "money and run load experiments, and are only allowed on a loopback address"
+            )
+        if self.enable_dev_endpoints and (problem := lab_secret_problem(self)):
+            raise ValueError(problem)
+        if self.app_env == "production" and self.expose_replica_header:
+            raise ValueError(
+                "EXPOSE_REPLICA_HEADER must be false when APP_ENV=production (leaks topology)"
+            )
+        if self.app_env == "production" and self.db_echo:
+            raise ValueError(
+                "DB_ECHO must be false when APP_ENV=production (logs SQL bound parameters)"
+            )
         if self.app_env == "production" and (
             self.consumer_crash_before_commit_event or self.consumer_crash_after_commit_event
         ):

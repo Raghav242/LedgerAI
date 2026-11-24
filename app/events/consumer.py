@@ -44,6 +44,7 @@ from app.core.database import atomic, create_db_engine, create_session_factory
 from app.core.exceptions import ConcurrencyConflictError
 from app.core.logging import configure_logging
 from app.events.backoff import backoff_ms
+from app.events.dead_letter_policy import ensure_dead_letter_policy
 from app.events.heartbeat import beat
 from app.events.rabbitmq import Topology, connect, declare_topology, persistent_properties
 from app.events.schemas import EventEnvelope, InvalidEventError, parse_envelope
@@ -192,6 +193,7 @@ class EventConsumer:
         self._connection = self._connect(self._settings)
         channel = self._connection.channel()
         declare_topology(channel, self._topology)
+        ensure_dead_letter_policy(self._settings, self._topology)
         channel.basic_qos(prefetch_count=self._settings.consumer_prefetch)
         publish_channel = self._connection.channel()
         publish_channel.confirm_delivery()
@@ -305,9 +307,11 @@ class EventConsumer:
         reason: str,
     ) -> Outcome:
         assert self._publish_channel is not None
+        # Straight to THIS consumer's DLQ (default exchange, routed by queue name): never
+        # through the shared fanout, so no other consumer's DLQ receives a copy.
         self._publish_channel.basic_publish(
-            exchange=self._topology.dead_letter_exchange,
-            routing_key=method.routing_key or "",
+            exchange="",
+            routing_key=self._topology.dead_letter_queue,
             body=body,
             properties=self._copy_properties(
                 properties,

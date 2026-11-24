@@ -433,6 +433,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/ai/drift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Input drift of recent live features vs the training distribution (PSI) */
+        get: operations["drift_api_v1_ai_drift_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/ai/results": {
         parameters: {
             query?: never;
@@ -668,6 +685,34 @@ export interface components {
              * @default []
              */
             notes: string[];
+            /**
+             * Mem Mib
+             * @default {}
+             */
+            mem_mib: {
+                [key: string]: number;
+            };
+            /**
+             * Lock Timeouts
+             * @default 0
+             */
+            lock_timeouts: number;
+            /** Run */
+            run?: number | null;
+            /** Repeats */
+            repeats?: number | null;
+            /** Rps Std */
+            rps_std?: number | null;
+            /** Rps Min */
+            rps_min?: number | null;
+            /** Rps Max */
+            rps_max?: number | null;
+            /** P95 Std */
+            p95_std?: number | null;
+            /** P99 Std */
+            p99_std?: number | null;
+            /** Scaling Efficiency */
+            scaling_efficiency?: number | null;
         };
         /** BenchmarkRun */
         BenchmarkRun: {
@@ -681,6 +726,11 @@ export interface components {
             };
             /** Results */
             results: components["schemas"]["BenchmarkResult"][];
+            /**
+             * Runs
+             * @default []
+             */
+            runs: components["schemas"]["BenchmarkResult"][];
             /** Error */
             error?: string | null;
         };
@@ -816,6 +866,31 @@ export interface components {
             /** Volume Minor */
             volume_minor: number;
         };
+        /** DriftReport */
+        DriftReport: {
+            /** Model Version */
+            model_version: string;
+            /** Sample Size */
+            sample_size: number;
+            /** Min Sample */
+            min_sample: number;
+            /** Window Start */
+            window_start: string | null;
+            /** Window End */
+            window_end: string | null;
+            /** Overall */
+            overall: string;
+            /** Live Anomaly Rate */
+            live_anomaly_rate: number | null;
+            /** Live Model Flag Rate */
+            live_model_flag_rate: number | null;
+            /** Expected Anomaly Rate */
+            expected_anomaly_rate: number | null;
+            /** Features */
+            features: components["schemas"]["FeatureDriftRead"][];
+            /** Note */
+            note: string;
+        };
         /** ErrorBody */
         ErrorBody: {
             /** Code */
@@ -946,6 +1021,19 @@ export interface components {
             estimated_seconds: number;
             /** Params */
             params: components["schemas"]["ParamSpec"][];
+        };
+        /** FeatureDriftRead */
+        FeatureDriftRead: {
+            /** Feature */
+            feature: string;
+            /** Psi */
+            psi: number;
+            /** Status */
+            status: string;
+            /** Live Median */
+            live_median: number;
+            /** Train Median */
+            train_median: number;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1301,6 +1389,11 @@ export interface components {
             available: boolean;
             /** Version */
             version?: string | null;
+            /**
+             * Versions
+             * @default []
+             */
+            versions: string[];
             /** Algorithm */
             algorithm?: string | null;
             /**
@@ -1308,10 +1401,31 @@ export interface components {
              * @default []
              */
             features: string[];
+            /** Feature Schema Version */
+            feature_schema_version?: number | null;
+            /** Families */
+            families?: {
+                [key: string]: string[];
+            } | null;
+            /** Decision */
+            decision?: string | null;
+            /** Decision Rule */
+            decision_rule?: string | null;
             /** Threshold */
             threshold?: number | null;
+            /** Model Threshold */
+            model_threshold?: number | null;
             /** Threshold Rule */
             threshold_rule?: string | null;
+            /**
+             * Validation
+             * @default {}
+             */
+            validation: {
+                [key: string]: unknown;
+            };
+            /** Expected Anomaly Rate */
+            expected_anomaly_rate?: number | null;
             /** Score Meaning */
             score_meaning?: string | null;
             /** Trained At */
@@ -1336,7 +1450,7 @@ export interface components {
              */
             reference: {
                 [key: string]: {
-                    [key: string]: number;
+                    [key: string]: unknown;
                 };
             };
             /**
@@ -1351,6 +1465,10 @@ export interface components {
              * @default []
              */
             limitations: string[];
+            /** Report */
+            report?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** Page[AccountRead] */
         Page_AccountRead_: {
@@ -2602,6 +2720,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ModelInfo"];
+                };
+            };
+        };
+    };
+    drift_api_v1_ai_drift_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DriftReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

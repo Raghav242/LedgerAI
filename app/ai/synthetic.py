@@ -15,9 +15,18 @@ the AI Lab can reproduce its scenarios live in a few seconds:
 
 Labels are the generator's intent ("normal", "large", "burst", "new_account").
 The same seed always yields exactly the same rows.
+
+Scenarios (Phase 6B) shift the world for robustness evaluation, never for training:
+  baseline       the defaults above (the training world)
+  amount_shift   every account's typical amount x3 (inflation / a richer population)
+  fast_normal    normal accounts transact 2-4x faster (mean gap 1-12 s): stresses false
+                 positives of velocity features
+  slow_bursts    burst transfers 0.6-2.0 s apart: evades a fixed "< 1 s" rule
+The baseline draws random numbers in exactly the original order, so the training data
+(and the v1 model's reproduction) are unchanged.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import numpy as np
@@ -26,6 +35,35 @@ from app.ai.features import compute_features, prior_from_history
 
 DEFAULT_SEED = 20261120
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class Scenario:
+    name: str = "baseline"
+    population_median: float = 4_000.0  # cents
+    mean_gap_range: tuple[float, float] = (3.0, 40.0)
+    burst_gap_range: tuple[float, float] = (0.05, 0.6)
+    description: str = field(default="the training world", compare=False)
+
+
+SCENARIOS: dict[str, Scenario] = {
+    "baseline": Scenario(),
+    "amount_shift": Scenario(
+        name="amount_shift",
+        population_median=12_000.0,
+        description="every typical amount x3",
+    ),
+    "fast_normal": Scenario(
+        name="fast_normal",
+        mean_gap_range=(1.0, 12.0),
+        description="normal accounts 2-4x faster",
+    ),
+    "slow_bursts": Scenario(
+        name="slow_bursts",
+        burst_gap_range=(0.6, 2.0),
+        description="bursts 0.6-2.0 s apart",
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,19 +88,23 @@ class Row:
 
 
 def generate(
-    seed: int = DEFAULT_SEED, *, accounts: int = 1200, horizon_s: float = 1800.0
+    seed: int = DEFAULT_SEED,
+    *,
+    accounts: int = 1200,
+    horizon_s: float = 1800.0,
+    scenario: Scenario = SCENARIOS["baseline"],
 ) -> tuple[list[SyntheticTransfer], dict[int, datetime]]:
     rng = np.random.default_rng(seed)
     transfers: list[SyntheticTransfer] = []
     created: dict[int, datetime] = {}
-    population_median = 4_000.0  # cents
+    population_median = scenario.population_median
     n_new = round(accounts * 0.04)
     for account in range(accounts + n_new):
         is_new_anomaly = account >= accounts
         start = float(rng.uniform(0, 1200))
         created[account] = T0 + timedelta(seconds=start)
         typical = float(np.exp(rng.normal(np.log(population_median), 0.8)))
-        mean_gap = float(rng.uniform(3, 40))
+        mean_gap = float(rng.uniform(*scenario.mean_gap_range))
         t = start
         if is_new_anomaly:
             t += float(rng.uniform(0.2, 4.0))
@@ -86,7 +128,7 @@ def generate(
             for i in range(size):
                 amount = typical * float(np.exp(rng.normal(0, 0.35)))
                 transfers.append(_transfer(account, bt, amount, "burst" if i >= 2 else "normal"))
-                bt += float(rng.uniform(0.05, 0.6))
+                bt += float(rng.uniform(*scenario.burst_gap_range))
     transfers.sort(key=lambda x: (x.at, x.account))
     return transfers, created
 

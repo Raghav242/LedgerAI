@@ -1,0 +1,71 @@
+# Reduced PUBLIC-DEMO profile (Phase 6C design; nothing is deployed by this repository).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.demo.yml up -d --build --wait
+#
+# What it changes relative to the development stack (see docs/public-demo.md):
+#   - APP_ENV=production: the app REFUSES to start with any development aid enabled
+#     (funding endpoint, Experiment Lab, observability/AI/performance routes, replica
+#     header, SQL echo, in-memory limiter, consumer fault injection)
+#   - PostgreSQL, Redis and RabbitMQ publish NO host ports; only NGINX (API) and the
+#     frontend are reachable, and only on DEMO_BIND (loopback unless set deliberately)
+#   - strict global quotas; the experiment controller (labctl) is never part of it
+# Still required before exposing it to the internet (docs/public-demo.md): TLS, a real
+# secret store, authentication/per-visitor quotas or a read-only seeded tenant.
+x-production: &production
+  APP_ENV: production
+  ENABLE_DEV_ENDPOINTS: "false"
+  EXPOSE_REPLICA_HEADER: "false"
+  LOG_LEVEL: WARNING
+
+services:
+  postgres:
+    ports: !reset []
+  redis:
+    ports: !reset []
+  rabbitmq:
+    ports: !reset []
+  rabbitmq-monitor-setup:
+    environment:
+      APP_ENV: production
+  migrate:
+    environment:
+      <<: *production
+  api-1:
+    environment:
+      <<: *production
+      REPLICA_ID: api-1
+      GATEWAY_BIND: ${DEMO_BIND:-127.0.0.1}
+      RATE_LIMIT_WRITE_CAPACITY: "5"
+      RATE_LIMIT_WRITE_REFILL_TOKENS: "1"
+      RATE_LIMIT_WRITE_REFILL_INTERVAL_MS: "2000"
+      RATE_LIMIT_READ_CAPACITY: "60"
+      RATE_LIMIT_READ_REFILL_TOKENS: "20"
+  api-2:
+    environment:
+      <<: *production
+      REPLICA_ID: api-2
+      GATEWAY_BIND: ${DEMO_BIND:-127.0.0.1}
+      RATE_LIMIT_WRITE_CAPACITY: "5"
+      RATE_LIMIT_WRITE_REFILL_TOKENS: "1"
+      RATE_LIMIT_WRITE_REFILL_INTERVAL_MS: "2000"
+      RATE_LIMIT_READ_CAPACITY: "60"
+      RATE_LIMIT_READ_REFILL_TOKENS: "20"
+  outbox-publisher:
+    environment:
+      <<: *production
+      REPLICA_ID: outbox-publisher
+  event-consumer:
+    environment:
+      <<: *production
+      REPLICA_ID: event-consumer
+  ai-worker:
+    environment:
+      <<: *production
+      REPLICA_ID: ai-worker
+      CONSUMER_NAME: anomaly-detector
+  nginx:
+    ports: !override
+      - "${DEMO_BIND:-127.0.0.1}:${NGINX_PORT:-8080}:8080"
+  frontend:
+    ports: !override
+      - "${DEMO_BIND:-127.0.0.1}:${FRONTEND_PORT:-3000}:8080"

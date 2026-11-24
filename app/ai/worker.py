@@ -27,7 +27,15 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.ai.features import BURST_WINDOW_SECONDS, HISTORY_WINDOW, PriorStats, compute_features
+from app.ai.features import (
+    BURST_WINDOW_SECONDS,
+    HISTORY_WINDOW,
+    MIN_GAPS_FOR_CADENCE,
+    SHORT_WINDOW_SECONDS,
+    FeatureSchemaError,
+    PriorStats,
+    compute_features,
+)
 from app.ai.model import AnomalyModel
 from app.core.config import Settings, get_settings
 from app.core.database import atomic, create_db_engine, create_session_factory
@@ -59,13 +67,30 @@ def prior_stats(session: Session, source: uuid.UUID, at: datetime) -> PriorStats
         Transfer.created_at >= at - timedelta(seconds=BURST_WINDOW_SECONDS)
     ).subquery()
     recent = session.scalar(select(func.count()).select_from(recent_window))
+    short_window = earlier.where(
+        Transfer.created_at >= at - timedelta(seconds=SHORT_WINDOW_SECONDS)
+    ).subquery()
+    short = session.scalar(select(func.count()).select_from(short_window))
     window = earlier.order_by(Transfer.created_at.desc()).limit(HISTORY_WINDOW).subquery()
     median = session.scalar(select(func.percentile_cont(0.5).within_group(window.c.amount_minor)))
+    # Schema v2: median gap (seconds) between consecutive transfers in the same window.
+    gap = (
+        func.extract("epoch", window.c.created_at)
+        - func.extract("epoch", func.lag(window.c.created_at).over(order_by=window.c.created_at))
+    ).label("gap")
+    gaps = select(gap).select_from(window).subquery()
+    n_gaps, median_gap = session.execute(
+        select(func.count(gaps.c.gap), func.percentile_cont(0.5).within_group(gaps.c.gap))
+    ).one()
     return PriorStats(
         count=count or 0,
         median_amount_minor=float(median) if median is not None else None,
         last_at=last_at,
         count_last_60s=recent or 0,
+        median_gap_s=(
+            float(median_gap) if median_gap is not None and n_gaps >= MIN_GAPS_FOR_CADENCE else None
+        ),
+        count_last_10s=short or 0,
     )
 
 
@@ -107,7 +132,10 @@ class AnomalyHandler:
                 prior=prior,
             )
         with tracer.start_as_current_span("ai.predict") as span:
-            prediction = self._model.predict(features)
+            try:
+                prediction = self._model.predict(features)
+            except FeatureSchemaError as exc:  # never score malformed inputs; DLQ, no retry
+                raise PermanentEventError(f"feature schema: {exc}") from exc
             span.set_attribute("ledgerflow.ai.score", prediction.score)
             span.set_attribute("ledgerflow.ai.is_anomaly", prediction.is_anomaly)
             span.set_attribute("ledgerflow.ai.model_version", prediction.model_version)

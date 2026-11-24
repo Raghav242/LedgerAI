@@ -1,0 +1,27 @@
+# gitleaks configuration (Phase 6C): the default rules, plus an allow-list for the values
+# that are deliberately public. Everything here is a documented NON-secret:
+#   - the local development defaults in .env.example ("ledgerflow_dev_password" etc.)
+#   - throwaway CI/test credentials ("ci_only_...", "integration-tests-only-...")
+#   - the model artifacts' SHA-256 digests (high-entropy, but hashes, not secrets)
+[extend]
+useDefault = true
+
+[allowlist]
+description = "documented non-secret development and test values"
+# Match against the whole line, so a variable NAME that looks like a key is recognisable.
+regexTarget = "line"
+regexes = [
+  # false positive: a routing-key variable passed as an event type (test helper)
+  '''event_type=routing_key''',
+  '''ledgerflow_dev_password''',
+  '''ledgerflow_app_dev_password''',
+  '''ci_only_[a-z_]+''',
+  '''ci-only-lab-signing-key-not-a-secret-0123456789''',
+  '''(unit|integration)-tests-only-[a-z-]+[0-9]*''',
+  '''openapi-export-only[a-z0-9-]*''',
+]
+paths = [
+  '''app/ai/model/.*\.json''',
+  '''frontend/package-lock\.json''',
+  '''benchmarks/results/.*''',
+]
